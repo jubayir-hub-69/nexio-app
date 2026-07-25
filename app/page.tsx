@@ -105,25 +105,25 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const oldTheme = localStorage.getItem("arcbank_theme");
-    if (oldTheme && !localStorage.getItem("trustbank_theme")) {
-      localStorage.setItem("trustbank_theme", oldTheme);
+    const oldTheme = localStorage.getItem("trustbank_theme");
+    if (oldTheme && !localStorage.getItem("nexio_theme")) {
+      localStorage.setItem("nexio_theme", oldTheme);
     }
-    const savedTheme = localStorage.getItem("trustbank_theme") as "dark" | "light";
+    const savedTheme = localStorage.getItem("nexio_theme") as "dark" | "light";
     if (savedTheme) setTheme(savedTheme);
   }, []);
 
   const toggleTheme = () => {
     const newTheme = theme === "dark" ? "light" : "dark";
     setTheme(newTheme);
-    localStorage.setItem("trustbank_theme", newTheme);
+    localStorage.setItem("nexio_theme", newTheme);
   };
 
   const addHistoryRecord = (label: string, amount: string, meta: string, status: "Completed" | "Pending" | "Failed", txHash?: string) => {
     setTxHistory((prev) => {
       const newHistory = [{ id: Date.now(), label, amount, meta, status, txHash }, ...prev];
       if (wallet) {
-        localStorage.setItem(`trustbank_history_${wallet}`, JSON.stringify(newHistory.slice(0, 50)));
+        localStorage.setItem(`nexio_history_${wallet}`, JSON.stringify(newHistory.slice(0, 50)));
       }
       return newHistory;
     });
@@ -204,8 +204,25 @@ export default function Home() {
   useEffect(() => {
     if (!wallet) return;
 
-    const storedStreak = localStorage.getItem(`trustbank_streak_${wallet}`);
-    const storedDate = localStorage.getItem(`trustbank_last_gm_${wallet}`);
+    const oldStreak = localStorage.getItem(`trustbank_streak_${wallet}`);
+    if (oldStreak && !localStorage.getItem(`nexio_streak_${wallet}`)) {
+      localStorage.setItem(`nexio_streak_${wallet}`, oldStreak);
+      localStorage.setItem(`nexio_last_gm_${wallet}`, localStorage.getItem(`trustbank_last_gm_${wallet}`) || "");
+    }
+
+    const oldDomain = localStorage.getItem(`trustbank_domain_name_${wallet}`);
+    if (oldDomain && !localStorage.getItem(`nexio_domain_name_${wallet}`)) {
+      const migratedDomain = oldDomain.replace(".trust", ".nex");
+      localStorage.setItem(`nexio_domain_name_${wallet}`, migratedDomain);
+    }
+
+    const oldHistory = localStorage.getItem(`trustbank_history_${wallet}`);
+    if (oldHistory && !localStorage.getItem(`nexio_history_${wallet}`)) {
+      localStorage.setItem(`nexio_history_${wallet}`, oldHistory);
+    }
+
+    const storedStreak = localStorage.getItem(`nexio_streak_${wallet}`);
+    const storedDate = localStorage.getItem(`nexio_last_gm_${wallet}`);
     const today = new Date().toLocaleDateString();
 
     if (storedDate) {
@@ -229,10 +246,10 @@ export default function Home() {
       setStreak(0);
     }
     
-    const myDomain = localStorage.getItem(`trustbank_domain_name_${wallet}`);
+    const myDomain = localStorage.getItem(`nexio_domain_name_${wallet}`);
     if (myDomain) setRegisteredDomain(myDomain);
 
-    const savedHistory = localStorage.getItem(`trustbank_history_${wallet}`);
+    const savedHistory = localStorage.getItem(`nexio_history_${wallet}`);
     if (savedHistory) setTxHistory(JSON.parse(savedHistory));
 
   }, [wallet]);
@@ -289,7 +306,7 @@ export default function Home() {
       } else {
         const newWallet = accounts[0];
         setWallet(newWallet);
-        const savedHistory = localStorage.getItem(`trustbank_history_${newWallet}`);
+        const savedHistory = localStorage.getItem(`nexio_history_${newWallet}`);
         if (savedHistory) setTxHistory(JSON.parse(savedHistory));
       }
     };
@@ -304,7 +321,6 @@ export default function Home() {
     };
   }, []);
 
-  // Fix 1: Pause background refresh during sending
   useEffect(() => {
     if (!wallet || !isArcTestnet || isSending || showSendModal) return;
     void fetchBalances(wallet);
@@ -353,7 +369,7 @@ export default function Home() {
       if (!accounts?.length) return;
 
       const signer = await provider.getSigner();
-      await signer.signMessage("Sign in to TrustBank");
+      await signer.signMessage("Sign in to Nexio");
 
       setWallet(accounts[0]);
       const currentChainId = await syncNetwork();
@@ -469,9 +485,9 @@ export default function Home() {
       for (let target of addresses) {
         const lowerTarget = target.toLowerCase();
         
-        if (lowerTarget.endsWith(".trust")) {
+        if (lowerTarget.endsWith(".nex")) {
           showMessage(`Resolving ${target}...`);
-          const nameOnly = lowerTarget.replace(/\.trust$/, "");
+          const nameOnly = lowerTarget.replace(/\.nex$/, "");
           
           try {
              const resolvedAddress = await ansContract.resolve(nameOnly);
@@ -504,7 +520,6 @@ export default function Home() {
         const currentTarget = resolvedAddresses[i];
         const displayTarget = addresses[i];
 
-        // Fix 2: Add 8-second delay before all subsequent transactions in the batch
         if (i > 0) {
           for (let s = 8; s > 0; s--) {
             showMessage(`Preparing transaction ${i + 1} of ${resolvedAddresses.length}... (${s}s)`);
@@ -605,8 +620,8 @@ export default function Home() {
       const today = new Date().toLocaleDateString();
       setStreak(newStreak);
       setHasCheckedInToday(true);
-      localStorage.setItem(`trustbank_streak_${wallet}`, newStreak.toString());
-      localStorage.setItem(`trustbank_last_gm_${wallet}`, today);
+      localStorage.setItem(`nexio_streak_${wallet}`, newStreak.toString());
+      localStorage.setItem(`nexio_last_gm_${wallet}`, today);
 
       showMessage(`GM! Daily check-in successful. You are on Day ${newStreak} 🔥`);
       addHistoryRecord("Daily GM Check-in", "", `Streak: Day ${newStreak} 🔥`, "Completed", receipt?.hash || "");
@@ -621,7 +636,7 @@ export default function Home() {
 
   const handleSearchDomain = async () => {
     let cleanSearch = domainSearch.trim().toLowerCase();
-    cleanSearch = cleanSearch.replace(/\.trust$/, "");
+    cleanSearch = cleanSearch.replace(/\.nex$/, "");
     cleanSearch = cleanSearch.replace(/[^a-z0-9-]/g, '');
 
     if (!cleanSearch) return showMessage("Enter a valid domain name");
@@ -685,7 +700,7 @@ export default function Home() {
       const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, signer);
       
       let cleanName = domainSearch.toLowerCase();
-      cleanName = cleanName.replace(/\.trust$/, "");
+      cleanName = cleanName.replace(/\.nex$/, "");
       cleanName = cleanName.replace(/[^a-z0-9-]/g, '');
 
       showMessage("Confirm Registration in Wallet...");
@@ -695,13 +710,13 @@ export default function Home() {
       showMessage("Registering domain on Arc Network...");
       const receipt = await tx.wait();
 
-      const newDomain = `${cleanName}.trust`;
+      const newDomain = `${cleanName}.nex`;
       setRegisteredDomain(newDomain);
       setRegistrationHash(receipt?.hash || "");
       
-      localStorage.setItem(`trustbank_domain_name_${wallet}`, newDomain);
+      localStorage.setItem(`nexio_domain_name_${wallet}`, newDomain);
 
-      addHistoryRecord("TrustBank Domain Registration", "Free", newDomain, "Completed", receipt?.hash || "");
+      addHistoryRecord("Nexio Domain Registration", "Free", newDomain, "Completed", receipt?.hash || "");
       
       setShowDomainSuccess(true);
       triggerConfetti();
@@ -722,25 +737,25 @@ export default function Home() {
 
   const shareOnX = () => {
     const appUrl = window.location.origin;
-    const text = encodeURIComponent(`Verified my domain identity on TrustBank. 🌐\n\nClean Web3 ID with on-chain daily GM streak using TrustBank Pass.\n\nEnterprise-grade stablecoin & identity tools built on @ArcNetwork.\n\n${appUrl}`);
+    const text = encodeURIComponent(`Just created my Web3 identity with @Nexio_0.\nHuman-readable domains, secure stablecoin payments, and enterprise-grade identity infrastructure—all in one place.\n\n${appUrl}`);
     window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank");
   };
 
   const downloadTrustPass = () => {
     showMessage("Generating Image... Please wait ⏳");
-    const element = document.getElementById("trustbank-pass-card");
+    const element = document.getElementById("nexio-pass-card");
     if (!element) return;
 
     const runImageGenerator = () => {
       (window as any).domtoimage.toPng(element, { quality: 1, bgcolor: '#050B14', scale: 3 })
         .then((dataUrl: string) => {
           const link = document.createElement('a');
-          link.download = `${registeredDomain || 'trustbank'}-pass.png`;
+          link.download = `${registeredDomain || 'nexio'}-pass.png`;
           link.href = dataUrl;
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
-          showMessage("TrustBank Pass saved to your device! 📸");
+          showMessage("Nexio Pass saved to your device! 📸");
         })
         .catch((err: any) => {
           console.error("Image Generation Error:", err);
@@ -818,7 +833,7 @@ export default function Home() {
           <div className="w-full max-w-md rounded-[2.5rem] border border-cyan-500/30 bg-gradient-to-b from-[#0A1A3F] to-[#020617] p-8 shadow-[0_0_80px_rgba(6,182,212,0.2)] flex flex-col items-center text-center relative overflow-hidden">
             <button onClick={() => setShowDomainSuccess(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition bg-white/5 hover:bg-white/10 rounded-full p-2.5 z-10">✕</button>
             <div className="w-24 h-24 bg-[#050B14] border border-cyan-500/20 rounded-3xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.3)] mb-6 overflow-hidden p-2 transform transition-transform hover:scale-105">
-              <img src="/trustbank-logo.jpg" alt="TrustBank Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-2xl" />
+              <img src="/nexio-logo.png" alt="Nexio Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-2xl" />
             </div>
             <h2 className="text-3xl font-black text-white tracking-tight mb-2">Congratulations!</h2>
             <p className="text-sm font-medium text-gray-300 mb-6">Your domain has been successfully registered, <span className="text-cyan-400 font-bold">verified on Arc Testnet</span>!</p>
@@ -856,7 +871,10 @@ export default function Home() {
               </div>
 
               <div>
-                <label className={`text-xs font-bold mb-2 block uppercase tracking-widest ${tc.historyText}`}>Requested Amount</label>
+                <label className={`text-xs font-bold mb-2 flex justify-between uppercase tracking-widest ${tc.historyText}`}>
+                  <span>Requested Amount</span>
+                  <span className="font-mono">Bal: {requestAsset === "USDC" ? usdcBalance : eurcBalance}</span>
+                </label>
                 <input type="number" value={requestAmount} onChange={(e) => setRequestAmount(e.target.value)} placeholder="0.00" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition text-2xl font-black ${tc.inputBg}`} />
               </div>
 
@@ -946,9 +964,9 @@ export default function Home() {
                   {isBatchMode && <span className="text-[9px] text-orange-400">Separate with comma (,)</span>}
                 </label>
                 {isBatchMode ? (
-                  <textarea value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="0x1..., jubayir.trust, 0x3..." className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm resize-none h-24 ${tc.inputBg}`} />
+                  <textarea value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="0x1..., jubayir.nex, 0x3..." className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm resize-none h-24 ${tc.inputBg}`} />
                 ) : (
-                  <input type="text" value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="e.g., 0x... or jubayir.trust" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm ${tc.inputBg}`} />
+                  <input type="text" value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="e.g., 0x... or jubayir.nex" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm ${tc.inputBg}`} />
                 )}
               </div>
               <div>
@@ -999,10 +1017,10 @@ export default function Home() {
             <span className="text-xl">🔥</span>
           </button>
           <button onClick={() => handleTabSwitch("domains")} className={`w-full rounded-2xl px-6 py-4 text-left font-black tracking-wide transition-all border ${selectedTab === "domains" ? tc.sidebarActive : tc.sidebarInactive}`}>
-            TrustBank Domains
+            Nexio Domains
           </button>
           <button onClick={() => handleTabSwitch("trustpass")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "trustpass" ? tc.sidebarActive : tc.sidebarInactive}`}>
-            <span>TrustBank Pass</span>
+            <span>Nexio Pass</span>
             <span className={`text-[10px] px-2 py-1 rounded-lg ${theme === 'dark' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-cyan-100 text-cyan-700'}`}>NEW</span>
           </button>
           <button onClick={() => handleTabSwitch("history")} className={`w-full rounded-2xl px-6 py-4 text-left font-black tracking-wide transition-all border ${selectedTab === "history" ? tc.sidebarActive : tc.sidebarInactive}`}>
@@ -1023,7 +1041,7 @@ export default function Home() {
       {/* TOP NAVIGATION */}
       <nav className={`flex flex-wrap items-center justify-between gap-4 px-4 py-4 md:px-10 md:py-6 sticky top-0 z-40 backdrop-blur-xl border-b transition-colors duration-500 ${tc.navBorder}`}>
         <div className="flex items-center gap-3 md:gap-5">
-          <h1 className={`text-xl sm:text-2xl md:text-3xl font-black tracking-tighter drop-shadow-md ${tc.textMain}`}>TrustBank</h1>
+          <h1 className={`text-xl sm:text-2xl md:text-3xl font-black tracking-tighter drop-shadow-md ${tc.textMain}`}>Nexio</h1>
           
           {wallet && (
             <div className={`hidden sm:flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md ${theme === 'dark' ? 'border-white/5 bg-black/30' : 'border-slate-200 bg-white shadow-sm'}`}>
@@ -1057,7 +1075,7 @@ export default function Home() {
           
           <div className="text-center space-y-3 md:space-y-4">
             <h1 className={`text-4xl sm:text-6xl md:text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br pb-2 drop-shadow-sm ${tc.textWelcome}`}>
-              Welcome to TrustBank
+              Welcome to Nexio
             </h1>
             <p className={`text-sm md:text-lg font-medium tracking-wide max-w-xl mx-auto px-2 ${tc.textDesc}`}>
               Enterprise-grade stablecoin management built on the lightning-fast Arc L1 Network.
@@ -1140,8 +1158,8 @@ export default function Home() {
             {selectedTab === "domains" && (
               <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-10 relative overflow-hidden animate-in fade-in zoom-in-95 duration-500 ${theme === 'dark' ? 'border border-cyan-500/20 bg-gradient-to-br from-[#0A1A3F]/60 to-black backdrop-blur-3xl shadow-2xl' : 'border border-cyan-200 bg-gradient-to-br from-cyan-50 to-white shadow-xl'}`}>
                 <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>🌐</div>
-                <h2 className={`text-2xl md:text-4xl font-black tracking-tight mb-2 md:mb-3 ${tc.textMain}`}>TrustBank Web3 Identity</h2>
-                <p className={`text-xs md:text-base font-medium mb-6 md:mb-10 max-w-xl ${tc.textMuted}`}>Register your unique <span className={theme === 'dark' ? 'text-cyan-400 font-bold' : 'text-cyan-600 font-bold'}>.trust</span> username on the blockchain and establish your lifetime identity.</p>
+                <h2 className={`text-2xl md:text-4xl font-black tracking-tight mb-2 md:mb-3 ${tc.textMain}`}>Nexio Web3 Identity</h2>
+                <p className={`text-xs md:text-base font-medium mb-6 md:mb-10 max-w-xl ${tc.textMuted}`}>Register your unique <span className={theme === 'dark' ? 'text-cyan-400 font-bold' : 'text-cyan-600 font-bold'}>.nex</span> username on the blockchain and establish your lifetime identity.</p>
                 
                 <div className={`flex flex-col sm:flex-row items-center gap-3 md:gap-4 w-full bg-black border rounded-3xl sm:rounded-full p-2 pl-4 md:pl-6 transition-shadow ${theme === 'dark' ? 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:shadow-[0_0_40px_rgba(6,182,212,0.2)]' : 'border-cyan-300 shadow-md hover:shadow-lg'}`}>
                   <span className={`hidden sm:inline-block text-xl font-bold ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>∞</span>
@@ -1150,7 +1168,7 @@ export default function Home() {
                     value={domainSearch}
                     onChange={(e) => { 
                       let val = e.target.value.toLowerCase();
-                      val = val.replace(/\.trust$/, "");
+                      val = val.replace(/\.nex$/, "");
                       val = val.replace(/[^a-z0-9-]/g, '');
                       setDomainSearch(val); 
                       setDomainAvailable(false); 
@@ -1159,7 +1177,7 @@ export default function Home() {
                     className={`flex-1 w-full bg-transparent border-none text-lg md:text-xl font-bold focus:outline-none text-center sm:text-left py-2 sm:py-0 ${theme === 'dark' ? 'text-white placeholder-zinc-700' : 'text-slate-900 placeholder-slate-400'}`}
                   />
                   <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                    <div className={`font-black px-3 py-1.5 md:px-4 md:py-2 rounded-full border tracking-widest text-sm md:text-base ${theme === 'dark' ? 'bg-white/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-100 text-cyan-700 border-cyan-200'}`}>.trust</div>
+                    <div className={`font-black px-3 py-1.5 md:px-4 md:py-2 rounded-full border tracking-widest text-sm md:text-base ${theme === 'dark' ? 'bg-white/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-100 text-cyan-700 border-cyan-200'}`}>.nex</div>
                     <button onClick={handleSearchDomain} disabled={isCheckingDomain} className="bg-cyan-500 hover:bg-cyan-400 text-white font-black px-6 py-2 md:px-8 md:py-4 rounded-full transition-all active:scale-95 text-sm md:text-lg w-full sm:w-auto shadow-md disabled:opacity-50">
                       {isCheckingDomain ? "Checking..." : "Search →"}
                     </button>
@@ -1170,9 +1188,9 @@ export default function Home() {
                   <div className={`mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-between p-5 md:p-6 rounded-3xl animate-in fade-in slide-in-from-bottom-4 duration-500 ${theme === 'dark' ? 'bg-cyan-950/30 border border-cyan-500/30' : 'bg-cyan-50 border border-cyan-200'}`}>
                     <div className="flex items-center gap-4 md:gap-5">
                       <div className={`w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center p-1.5 ${theme === 'dark' ? 'bg-[#050B14] border border-cyan-500/20 shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-white border border-cyan-200 shadow-sm'}`}>
-                        <img src="/trustbank-logo.jpg" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-lg md:rounded-xl" />
+                        <img src="/nexio-logo.png" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-lg md:rounded-xl" />
                       </div>
-                      <div className={`text-xl md:text-2xl font-black ${tc.textMain}`}>{domainSearch}.trust</div>
+                      <div className={`text-xl md:text-2xl font-black ${tc.textMain}`}>{domainSearch}.nex</div>
                     </div>
                     <div className="flex items-center gap-4 md:gap-6 mt-4 sm:mt-0 w-full sm:w-auto justify-between sm:justify-end">
                       <div className={`text-sm md:text-base font-bold ${theme === 'dark' ? 'text-gray-300' : 'text-slate-600'}`}>Free (Gas Only)</div>
@@ -1196,8 +1214,8 @@ export default function Home() {
                 {!registeredDomain ? (
                   <div className="text-center z-10 max-w-lg px-4">
                     <div className="text-5xl md:text-7xl mb-4 md:mb-6 animate-pulse">🪪</div>
-                    <h2 className={`text-2xl md:text-3xl font-black mb-3 md:mb-4 ${tc.textMain}`}>Unlock Your TrustBank Pass</h2>
-                    <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>You need to register a .trust domain to generate your exclusive Web3 Holographic Identity Card.</p>
+                    <h2 className={`text-2xl md:text-3xl font-black mb-3 md:mb-4 ${tc.textMain}`}>Unlock Your Nexio Pass</h2>
+                    <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>You need to register a .nex domain to generate your exclusive Web3 Holographic Identity Card.</p>
                     <button onClick={() => handleTabSwitch("domains")} className="bg-cyan-500 hover:bg-cyan-600 text-white font-black px-6 py-3 md:px-8 md:py-4 rounded-full transition-all active:scale-95 shadow-lg text-sm md:text-base">
                       Register Domain Now
                     </button>
@@ -1209,16 +1227,16 @@ export default function Home() {
                       <p className={`text-xs md:text-sm font-bold mt-1 md:mt-2 ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>Verified on Arc Blockchain</p>
                     </div>
 
-                    <div id="trustbank-pass-card" className="w-[90%] sm:w-full max-w-[450px] aspect-[1.58/1] rounded-2xl md:rounded-[2rem] border border-white/20 bg-gradient-to-br from-[#0A1A3F] to-cyan-900/40 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] md:shadow-[0_20px_50px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] relative overflow-hidden flex flex-col justify-between p-5 md:p-8 transform transition-transform md:hover:scale-105 md:hover:rotate-1 duration-500 group">
+                    <div id="nexio-pass-card" className="w-[90%] sm:w-full max-w-[450px] aspect-[1.58/1] rounded-2xl md:rounded-[2rem] border border-white/20 bg-gradient-to-br from-[#0A1A3F] to-cyan-900/40 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] md:shadow-[0_20px_50px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] relative overflow-hidden flex flex-col justify-between p-5 md:p-8 transform transition-transform md:hover:scale-105 md:hover:rotate-1 duration-500 group">
                       
                       <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent translate-x-[-150%] group-hover:translate-x-[150%] transition-transform duration-1000 ease-in-out"></div>
 
                       <div className="flex justify-between items-start w-full relative z-10">
                         <div className="flex items-center gap-2 md:gap-3">
                           <div className="w-8 h-8 md:w-10 md:h-10 bg-[#050B14] rounded-lg md:rounded-xl overflow-hidden border border-cyan-500/30 flex items-center justify-center p-1 md:p-1.5 shadow-[0_0_10px_rgba(6,182,212,0.3)]">
-                            <img src="/trustbank-logo.jpg" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-md" />
+                            <img src="/nexio-logo.png" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-md" />
                           </div>
-                          <div className="font-black text-base md:text-xl text-white tracking-widest uppercase">TRUSTBANK PASS</div>
+                          <div className="font-black text-base md:text-xl text-white tracking-widest uppercase">NEXIO PASS</div>
                         </div>
                         <div className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[8px] md:text-[10px] font-black tracking-widest uppercase flex items-center gap-1 md:gap-1.5">
                           <div className="w-1 h-1 md:w-1.5 md:h-1.5 rounded-full bg-emerald-400 animate-pulse"></div>
@@ -1324,16 +1342,16 @@ export default function Home() {
               <div className="space-y-6 md:space-y-8 animate-in fade-in duration-500">
                 <div className={`rounded-3xl md:rounded-[2.5rem] border p-6 md:p-12 shadow-2xl relative overflow-hidden mb-6 md:mb-8 ${theme === 'dark' ? 'border-cyan-500/20 bg-gradient-to-br from-[#0A1A3F]/80 to-black backdrop-blur-3xl' : 'border-cyan-200 bg-gradient-to-br from-cyan-50 to-white'}`}>
                   <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>🏦</div>
-                  <h2 className={`text-3xl md:text-5xl font-black mb-4 md:mb-6 tracking-tighter drop-shadow-sm ${tc.textMain}`}>What is TrustBank?</h2>
+                  <h2 className={`text-3xl md:text-5xl font-black mb-4 md:mb-6 tracking-tighter drop-shadow-sm ${tc.textMain}`}>What is Nexio?</h2>
                   <p className={`text-sm md:text-xl font-medium leading-relaxed max-w-3xl mb-6 md:mb-10 ${tc.textDesc}`}>
-                    TrustBank is an advanced Web3 Stablecoin Management and Identity Protocol built on the Arc Network. We make blockchain payments as simple as traditional banking by replacing complex addresses with human-readable <strong>.trust</strong> domains and offering enterprise-grade batch payment tools.
+                    Nexio is an advanced Web3 Stablecoin Management and Identity Protocol built on the Arc Network. We make blockchain payments as simple as traditional banking by replacing complex addresses with human-readable <strong>.nex</strong> domains and offering enterprise-grade batch payment tools.
                   </p>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mt-8">
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
                       <div className="text-2xl mb-2">🌐</div>
-                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>TrustBank Name Service</h4>
-                      <p className={`text-xs md:text-sm ${tc.textMuted}`}>Register a permanent .trust domain to replace your long 0x wallet address.</p>
+                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Name Service</h4>
+                      <p className={`text-xs md:text-sm ${tc.textMuted}`}>Register a permanent .nex domain to replace your long 0x wallet address.</p>
                     </div>
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
                       <div className="text-2xl mb-2">💸</div>
@@ -1347,7 +1365,7 @@ export default function Home() {
                     </div>
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
                       <div className="text-2xl mb-2">🪪</div>
-                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>TrustBank Pass & Daily GM</h4>
+                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Pass & Daily GM</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Build an on-chain streak and unlock your verifiable, holographic Web3 Identity Card.</p>
                     </div>
                   </div>
@@ -1357,7 +1375,7 @@ export default function Home() {
                   <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>📖</div>
                   <h2 className={`text-3xl md:text-5xl font-black mb-4 md:mb-6 tracking-tighter drop-shadow-sm ${tc.textMain}`}>Built on Arc Network</h2>
                   <p className={`text-sm md:text-xl font-medium leading-relaxed max-w-3xl mb-6 md:mb-10 ${tc.textDesc}`}>
-                    TrustBank relies on Arc, an enterprise-grade L1 blockchain designed specifically for stablecoin management, rapid payments, and decentralized finance. It brings together fiat-backed assets and powerful infrastructure to make global money movement seamless.
+                    Nexio relies on Arc, an enterprise-grade L1 blockchain designed specifically for stablecoin management, rapid payments, and decentralized finance. It brings together fiat-backed assets and powerful infrastructure to make global money movement seamless.
                   </p>
                   <button onClick={openArcWebsite} className={`rounded-full px-6 py-3 md:px-10 md:py-4 font-black transition-all active:scale-95 flex items-center gap-2 md:gap-3 text-sm md:text-base w-full sm:w-auto justify-center shadow-lg ${theme === 'dark' ? 'bg-white text-black hover:bg-gray-200' : 'bg-slate-900 text-white hover:bg-slate-800'}`}>
                     Visit Arc Official Website <span className="text-xl md:text-2xl">↗</span>
@@ -1373,7 +1391,7 @@ export default function Home() {
       <footer className={`mt-auto border-t py-8 md:py-12 backdrop-blur-2xl transition-colors duration-500 ${tc.footerBg}`}>
         <div className="mx-auto flex w-full max-w-4xl flex-col items-center justify-between gap-6 md:gap-8 px-6 md:flex-row">
           <div className={`text-xs md:text-sm font-bold tracking-widest uppercase text-center md:text-left ${tc.textMuted}`}>
-            © 2026 TRUSTBANK · BUILT ON ARC NETWORK
+            © 2026 NEXIO · BUILT ON ARC NETWORK
           </div>
           
           <div className="flex flex-col items-center gap-3 md:gap-4 md:items-end">
