@@ -10,7 +10,6 @@ const ARC_EXPLORER = "https://testnet.arcscan.app";
 const ARC_FAUCET = "https://faucet.circle.com";
 
 const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
-
 const ANS_CONTRACT_ADDRESS = "0x68A2a776BaE48fd0bB7a409a9709d61A34Ced42c";
 
 const ERC20_ABI = [
@@ -163,16 +162,25 @@ export default function Home() {
     }
   };
 
+  // 🚀 FIXED: Using wallet provider for fetching balances to avoid RPC rate limits
   const fetchBalances = useCallback(async (address: string, isSilentRefresh = false) => {
     if (!address) return;
     try {
       if (!isSilentRefresh) setBalancesLoading(true);
-      const rpcProvider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
-      const eurcContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, rpcProvider);
+      
+      let provider;
+      const eth = getEthereum();
+      if (eth) {
+        provider = new ethers.BrowserProvider(eth);
+      } else {
+        provider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
+      }
+
+      const eurcContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
 
       const start = Date.now();
       const [nativeUsdcRaw, eurcRaw] = await Promise.all([
-        rpcProvider.getBalance(address),
+        provider.getBalance(address),
         eurcContract.balanceOf(address)
       ]);
       setNetworkLatency(Date.now() - start);
@@ -477,8 +485,8 @@ export default function Home() {
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
 
-      const rpcProvider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
-      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, rpcProvider);
+      // 🚀 FIXED: Using internal provider instead of external RPC for domain resolving
+      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
       
       const resolvedAddresses: string[] = [];
 
@@ -520,11 +528,10 @@ export default function Home() {
         const currentTarget = resolvedAddresses[i];
         const displayTarget = addresses[i];
 
+        // 🚀 FIXED: Removed 8-second delay timer. Only kept a 500ms safety pause so the UI doesn't freeze.
         if (i > 0) {
-          for (let s = 8; s > 0; s--) {
-            showMessage(`Preparing transaction ${i + 1} of ${resolvedAddresses.length}... (${s}s)`);
-            await sleep(1000);
-          }
+          showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`);
+          await sleep(500); 
         }
 
         if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
@@ -634,6 +641,7 @@ export default function Home() {
     }
   };
 
+  // 🚀 FIXED: Using wallet provider to check domain availability, avoiding RPC rate limit errors
   const handleSearchDomain = async () => {
     let cleanSearch = domainSearch.trim().toLowerCase();
     cleanSearch = cleanSearch.replace(/\.nex$/, "");
@@ -643,9 +651,15 @@ export default function Home() {
     
     setIsCheckingDomain(true);
     try {
-      const rpcProvider = new ethers.JsonRpcProvider(ARC_RPC);
-      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, rpcProvider);
+      let provider;
+      const eth = getEthereum();
+      if (eth) {
+        provider = new ethers.BrowserProvider(eth);
+      } else {
+        provider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
+      }
       
+      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
       const available = await ansContract.isAvailable(cleanSearch);
       
       if (available) {
@@ -1270,7 +1284,7 @@ export default function Home() {
                     
                     <div className="mt-8 md:mt-10 flex flex-wrap justify-center gap-3 md:gap-4">
                       <button onClick={downloadTrustPass} className={`flex items-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-full transition-all font-bold text-xs md:text-sm border active:scale-95 shadow-md ${theme === 'dark' ? 'bg-white/10 hover:bg-white/20 text-white border-white/10' : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'}`}>
-                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         Save Image
                       </button>
                       
