@@ -39,7 +39,8 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [chainId, setChainId] = useState<number | null>(null);
   
-  const [selectedTab, setSelectedTab] = useState<"overview" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
+  // NEW: Added "portfolio" to selectedTab state
+  const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
@@ -49,7 +50,7 @@ export default function Home() {
 
   const [showSendModal, setShowSendModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [showReceiveModal, setShowReceiveModal] = useState(false); // NEW STATE FOR RECEIVE MODAL
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [sendAddress, setSendAddress] = useState("");
   const [sendAmount, setSendAmount] = useState("");
@@ -79,6 +80,23 @@ export default function Home() {
   const [networkLatency, setNetworkLatency] = useState(0);
 
   const isArcTestnet = chainId === ARC_CHAIN_ID;
+
+  // --- PORTFOLIO CALCULATION LOGIC ---
+  const usdcValue = parseFloat(usdcBalance || "0");
+  const eurcValue = parseFloat(eurcBalance || "0");
+  const eurcUsdRate = 1.09; // Mock real-world conversion rate for EURC to USD
+  const netWorthUsd = usdcValue + (eurcValue * eurcUsdRate);
+  
+  const usdcPercent = netWorthUsd > 0 ? ((usdcValue / netWorthUsd) * 100).toFixed(0) : "0";
+  const eurcPercent = netWorthUsd > 0 ? (((eurcValue * eurcUsdRate) / netWorthUsd) * 100).toFixed(0) : "0";
+
+  let totalVolume = 0;
+  txHistory.forEach(tx => {
+    if(tx.status === "Completed" && tx.amount && tx.amount.startsWith("-")) {
+      totalVolume += parseFloat(tx.amount.replace(/[^0-9.]/g, ""));
+    }
+  });
+  // -----------------------------------
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -866,7 +884,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* NEW RECEIVE MODAL WITH REAL QR CODE */}
       {showReceiveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className={`w-full max-w-sm rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 shadow-[0_0_50px_rgba(6,182,212,0.15)] ${tc.modalBg}`}>
@@ -877,7 +894,6 @@ export default function Home() {
             
             <div className="flex flex-col items-center justify-center space-y-6">
               <div className="bg-white p-3 rounded-3xl shadow-xl border border-gray-200">
-                {/* 100% Real Live QR Code generated using public API */}
                 <img src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${wallet}&color=0A1A3F`} alt="Wallet QR Code" className="w-48 h-48 rounded-2xl" />
               </div>
               
@@ -929,7 +945,6 @@ export default function Home() {
               ) : (
                 <div className="mt-4 p-5 rounded-3xl border border-cyan-500/30 bg-cyan-500/10 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex flex-col sm:flex-row items-center gap-4">
-                    {/* Real Live QR Code for the Payment Link */}
                     <div className="bg-white p-2 rounded-xl shadow-lg shrink-0">
                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentLink)}&color=0A1A3F`} alt="Payment Link QR" className="w-20 h-20 rounded-lg" />
                     </div>
@@ -1056,7 +1071,7 @@ export default function Home() {
       {/* DRAWER / SIDEBAR */}
       <div className={`fixed inset-0 z-[100] transition-opacity duration-300 ${isSidebarOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
         <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
-        <div className={`absolute top-0 right-0 w-72 sm:w-80 h-full border-l p-6 flex flex-col gap-2 transform transition-transform duration-300 shadow-2xl ${tc.drawerBg} ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className={`absolute top-0 right-0 w-72 sm:w-80 h-full border-l p-6 flex flex-col gap-2 transform transition-transform duration-300 shadow-2xl overflow-y-auto ${tc.drawerBg} ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
           <div className="flex justify-between items-center mb-6">
             <span className={`text-xl font-black ${tc.textMain}`}>Menu</span>
             <button onClick={() => setIsSidebarOpen(false)} className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-900'}`}>✕</button>
@@ -1065,6 +1080,13 @@ export default function Home() {
           <button onClick={() => handleTabSwitch("overview")} className={`w-full rounded-2xl px-6 py-4 text-left font-black tracking-wide transition-all border ${selectedTab === "overview" ? tc.sidebarActive : tc.sidebarInactive}`}>
             Dashboard
           </button>
+
+          {/* NEW PORTFOLIO TAB BUTTON */}
+          <button onClick={() => handleTabSwitch("portfolio")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "portfolio" ? tc.sidebarActive : tc.sidebarInactive}`}>
+            <span>Analytics</span>
+            <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-700'}`}>DEFI</span>
+          </button>
+
           <button onClick={() => handleTabSwitch("dailygm")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "dailygm" ? tc.sidebarActive : tc.sidebarInactive}`}>
             <span>Daily GM</span>
             <span className="text-xl">🔥</span>
@@ -1166,7 +1188,7 @@ export default function Home() {
 
                   <button onClick={() => {
                     if(!wallet) return showMessage("Connect wallet first");
-                    setShowReceiveModal(true); // TRIGGER RECEIVE MODAL INSTEAD OF JUST COPY
+                    setShowReceiveModal(true);
                   }} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center ${tc.actionCard}`}>
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Receive</div>
                     <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>QR CODE PAY</span>
@@ -1176,6 +1198,61 @@ export default function Home() {
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Faucet</div>
                     <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>FREE TESTNET</span>
                   </button>
+                </div>
+              </div>
+            )}
+
+            {/* NEW PORTFOLIO TAB CONTENT */}
+            {selectedTab === "portfolio" && (
+              <div className="space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500">
+                {/* Total Net Worth Card */}
+                <div className={`rounded-3xl md:rounded-[2.5rem] border p-8 md:p-12 shadow-2xl relative overflow-hidden flex flex-col items-center text-center ${theme === 'dark' ? 'border-purple-500/20 bg-gradient-to-br from-purple-900/40 to-[#0A1A3F] backdrop-blur-3xl' : 'border-purple-200 bg-gradient-to-br from-purple-50 to-white'}`}>
+                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>📊</div>
+                  <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 md:mb-4 ${theme === 'dark' ? 'text-purple-400' : 'text-purple-600'}`}>Total Portfolio Net Worth</div>
+                  <div className={`text-5xl sm:text-6xl md:text-7xl font-black tracking-tighter drop-shadow-sm ${tc.textMain}`}>
+                    ${balancesLoading ? "..." : netWorthUsd.toFixed(2)}
+                  </div>
+                  <div className={`text-xs md:text-sm font-medium mt-2 md:mt-3 ${tc.textMuted}`}>Based on current global rate (1 EURC ≈ $1.09)</div>
+                  
+                  {/* Asset Allocation Progress Bar */}
+                  <div className="w-full max-w-2xl mt-8 md:mt-12 text-left">
+                    <div className="flex justify-between items-end mb-2">
+                      <span className={`text-xs md:text-sm font-bold uppercase tracking-widest ${tc.textMuted}`}>Asset Allocation</span>
+                    </div>
+                    <div className="w-full h-4 md:h-6 rounded-full overflow-hidden flex bg-gray-200 dark:bg-black/50 border border-white/5 shadow-inner">
+                      <div className="h-full bg-cyan-500 transition-all duration-1000" style={{ width: `${usdcPercent}%` }}></div>
+                      <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${eurcPercent}%` }}></div>
+                    </div>
+                    <div className="flex justify-between mt-3 text-xs md:text-sm font-black">
+                      <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-cyan-500"></div><span className={tc.textMain}>USDC <span className={tc.textMuted}>({usdcPercent}%)</span></span></div>
+                      <div className="flex items-center gap-2"><span className={tc.textMain}><span className={tc.textMuted}>({eurcPercent}%)</span> EURC</span><div className="w-3 h-3 rounded-full bg-emerald-500"></div></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8">
+                  {/* Volume Sent Analytics */}
+                  <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 flex flex-col justify-center relative overflow-hidden transition-all ${tc.solidCardBg}`}>
+                    <div className={`absolute top-4 right-4 p-3 text-3xl md:text-4xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>💸</div>
+                    <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Total Lifetime Spending</div>
+                    <div className={`text-3xl md:text-5xl font-black tracking-tighter ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
+                      ${totalVolume.toFixed(2)}
+                    </div>
+                    <div className={`text-xs mt-2 font-medium ${tc.textMuted}`}>Calculated from your verified on-chain history</div>
+                  </div>
+
+                  {/* Future Vault Yield Analytics (Mocked for now to show DeFi intent) */}
+                  <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 flex flex-col justify-center relative overflow-hidden transition-all ${tc.solidCardBg}`}>
+                    <div className={`absolute top-4 right-4 p-3 text-3xl md:text-4xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
+                    <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 flex items-center justify-between ${tc.textMuted}`}>
+                      <span>Nexio Vault Yield</span>
+                      <span className={`text-[8px] px-2 py-0.5 rounded-md text-orange-400 bg-orange-500/10 border border-orange-500/20`}>COMING NEXT</span>
+                    </div>
+                    <div className={`text-3xl md:text-5xl font-black tracking-tighter ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                      $0.00 <span className="text-xl md:text-2xl text-gray-500">Earned</span>
+                    </div>
+                    <div className={`text-xs mt-2 font-medium ${tc.textMuted}`}>Staking logic currently under development</div>
+                  </div>
                 </div>
               </div>
             )}
