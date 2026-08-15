@@ -85,6 +85,9 @@ export default function Home() {
   const eurcValue = parseFloat(eurcBalance || "0");
   const eurcUsdRate = 1.09; 
   const netWorthUsd = usdcValue + (eurcValue * eurcUsdRate);
+  
+  const usdcPercent = netWorthUsd > 0 ? ((usdcValue / netWorthUsd) * 100).toFixed(0) : "0";
+  const eurcPercent = netWorthUsd > 0 ? (((eurcValue * eurcUsdRate) / netWorthUsd) * 100).toFixed(0) : "0";
   // -----------------------------------
 
   useEffect(() => {
@@ -873,6 +876,7 @@ export default function Home() {
         </div>
       )}
 
+      {/* NEW RECEIVE MODAL WITH REAL QR CODE */}
       {showReceiveModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className={`w-full max-w-sm rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 shadow-[0_0_50px_rgba(6,182,212,0.15)] ${tc.modalBg}`}>
@@ -1190,7 +1194,7 @@ export default function Home() {
               </div>
             )}
 
-                        {/* NEW PORTFOLIO TAB CONTENT */}
+            {/* NEW PORTFOLIO TAB CONTENT */}
             {selectedTab === "portfolio" && (
               <div className="w-full max-w-2xl mx-auto space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 font-mono">
                 
@@ -1267,58 +1271,6 @@ export default function Home() {
                         <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
                       </div>
                     </div>
-                  </div>
-                </div>
-
-              </div>
-            )}
-            
-
-                {/* Minimalist Assets List */}
-                <div className={`p-8 md:p-10 rounded-[2rem] border ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
-                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Assets</span>
-                  
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
-                      <div className="flex items-center gap-4">
-                        <div className="w-2 h-2 rounded-full bg-cyan-500"></div>
-                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC</span>
-                      </div>
-                      <span className={`text-lg font-bold ${tc.textMain}`}>${usdcValue.toFixed(2)}</span>
-                    </div>
-                    
-                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
-                      <div className="flex items-center gap-4">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC</span>
-                      </div>
-                      <span className={`text-lg font-bold ${tc.textMain}`}>${(eurcValue * eurcUsdRate).toFixed(2)}</span>
-                    </div>
-
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-4">
-                        <div className="w-2 h-2 rounded-full bg-gray-500"></div>
-                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>Other</span>
-                      </div>
-                      <span className={`text-lg font-bold ${tc.textMain}`}>$0.00</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Minimalist Chart Section */}
-                <div className={`p-8 md:p-10 rounded-[2rem] border flex flex-col items-center ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
-                  <div className="flex items-center gap-6 sm:gap-10 mb-8 border-b border-gray-500/20 pb-4 w-full justify-center">
-                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>7D</button>
-                    <button className={`text-sm font-black tracking-widest ${theme === 'dark' ? 'text-white border-b-2 border-white' : 'text-slate-900 border-b-2 border-slate-900'}`}>30D</button>
-                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>90D</button>
-                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>1Y</button>
-                  </div>
-                  
-                  <div className={`w-full h-32 flex flex-col items-center justify-center rounded-xl border border-dashed ${theme === 'dark' ? 'border-white/10 bg-white/5' : 'border-slate-300 bg-slate-50'}`}>
-                    <span className="text-2xl mb-2">📈</span>
-                    <span className={`text-xs font-bold tracking-widest uppercase ${tc.textMuted}`}>
-                      Chart Data Syncing...
-                    </span>
                   </div>
                 </div>
 
