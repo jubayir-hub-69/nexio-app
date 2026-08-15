@@ -1190,26 +1190,89 @@ export default function Home() {
               </div>
             )}
 
-            {/* NEW PORTFOLIO TAB CONTENT */}
+                        {/* NEW PORTFOLIO TAB CONTENT */}
             {selectedTab === "portfolio" && (
               <div className="w-full max-w-2xl mx-auto space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 font-mono">
                 
-                {/* Minimalist Portfolio Header */}
-                <div className={`p-8 md:p-10 rounded-[2rem] border ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
+                {/* 100% Real Portfolio Header */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
                   <div className="flex flex-col items-center text-center">
-                    <span className={`text-sm font-bold tracking-widest uppercase mb-4 ${tc.textMuted}`}>Portfolio</span>
+                    <span className={`text-sm font-bold tracking-widest uppercase mb-4 ${tc.textMuted}`}>Total Net Worth</span>
                     <div className={`text-5xl sm:text-6xl font-black tracking-tighter mb-2 ${tc.textMain}`}>
                       ${balancesLoading ? "..." : netWorthUsd.toFixed(2)}
                     </div>
-                    <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Total Net Worth</span>
+                    <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Based on live data (1 EURC ≈ $1.09)</span>
+                  </div>
+                </div>
+
+                {/* 100% Real Assets List */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
+                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Your Assets</span>
+                  
+                  <div className="space-y-4">
+                    {/* USDC */}
+                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-3 h-3 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC</span>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-xl font-bold ${tc.textMain}`}>{usdcBalance} <span className="text-sm">USDC</span></div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${usdcValue.toFixed(2)}</div>
+                      </div>
+                    </div>
                     
-                    <div className={`flex items-center gap-3 text-sm font-bold ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
-                      <span>+${netWorthUsd > 0 ? (netWorthUsd * 0.0349).toFixed(2) : "0.00"}</span>
-                      <span>+{netWorthUsd > 0 ? "3.49" : "0.00"}%</span>
-                      <span className={tc.textMuted}>Today</span>
+                    {/* EURC */}
+                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC</span>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-xl font-bold ${tc.textMain}`}>{eurcBalance} <span className="text-sm">EURC</span></div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${(eurcValue * eurcUsdRate).toFixed(2)}</div>
+                      </div>
+                    </div>
+
+                    {/* Other */}
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-4">
+                        <div className="w-3 h-3 rounded-full bg-gray-500"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>Other</span>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-xl font-bold ${tc.textMain}`}>0.00</div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>$0.00</div>
+                      </div>
                     </div>
                   </div>
                 </div>
+
+                {/* 100% Real Asset Allocation Bar (Replaced Fake Chart) */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
+                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Asset Allocation</span>
+                  
+                  <div className="w-full">
+                    <div className={`w-full h-4 md:h-6 rounded-full overflow-hidden flex border shadow-inner mb-5 ${theme === 'dark' ? 'bg-black/50 border-white/5' : 'bg-gray-200 border-gray-300'}`}>
+                      <div className="h-full bg-cyan-500 transition-all duration-1000" style={{ width: `${usdcPercent}%` }}></div>
+                      <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${eurcPercent}%` }}></div>
+                    </div>
+                    <div className="flex justify-between text-xs md:text-sm font-black">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-cyan-500"></div>
+                        <span className={tc.textMain}>USDC <span className={tc.textMuted}>({usdcPercent}%)</span></span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={tc.textMain}><span className={tc.textMuted}>({eurcPercent}%)</span> EURC</span>
+                        <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            )}
+            
 
                 {/* Minimalist Assets List */}
                 <div className={`p-8 md:p-10 rounded-[2rem] border ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
