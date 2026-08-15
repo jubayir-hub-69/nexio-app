@@ -635,24 +635,52 @@ export default function Home() {
     }
   };
 
-  const handleClaimPts = () => {
-    if (!wallet) return showMessage("Please connect wallet");
+  // REAL TRANSACTION PTS CLAIM LOGIC
+  const handleClaimPts = async () => {
+    if (!wallet) return showMessage("Please connect wallet first");
     if (unclaimedPts <= 0) return showMessage("No pending PTS to claim");
+    
+    if (!isArcTestnet) {
+      showMessage("Switching to Arc Testnet...");
+      const switched = await switchToArcTestnet();
+      if (!switched) return;
+    }
 
     setIsVaultLoading(true);
     setVaultAction("claim");
     
-    setTimeout(() => {
+    try {
+      const ethereum = getEthereum();
+      const provider = new ethers.BrowserProvider(ethereum);
+      const signer = await provider.getSigner();
+
+      showMessage("Confirm PTS Claim in your wallet...");
+      
+      // Zero-value transaction to the user's wallet with claim data (costs gas, registers on-chain)
+      const memoHex = ethers.hexlify(ethers.toUtf8Bytes(`Nexio PTS Claim: ${unclaimedPts.toFixed(2)}`));
+      const tx = await signer.sendTransaction({
+        to: wallet,
+        value: 0,
+        data: memoHex
+      });
+      
+      showMessage("Broadcasting Claim to Arc Network...");
+      const receipt = await tx.wait();
+
       setClaimedPts(lifetimePts);
       localStorage.setItem(`nexio_claimed_pts_${wallet}`, lifetimePts.toString());
       
-      addHistoryRecord("Claimed Nexio PTS", `+${unclaimedPts.toFixed(2)} PTS`, "Loyalty Engagement Record", "Completed");
+      addHistoryRecord("Claimed Nexio PTS", `+${unclaimedPts.toFixed(2)} PTS`, "Loyalty Engagement Record", "Completed", receipt?.hash || "");
       showMessage("PTS Claimed Successfully! 🎯");
       triggerConfetti();
-      
+
+    } catch (error: any) {
+      console.error("Claim Error:", error);
+      showMessage(error?.reason || "Claim transaction failed or rejected");
+    } finally {
       setIsVaultLoading(false);
       setVaultAction(null);
-    }, 1500); // Simulate processing time for UX
+    }
   };
 
   const executeSend = async () => {
@@ -1031,12 +1059,12 @@ export default function Home() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020617]/90 p-4 backdrop-blur-xl">
           <div className="w-full max-w-md rounded-[2.5rem] border border-cyan-500/30 bg-gradient-to-b from-[#0A1A3F] to-[#020617] p-8 shadow-[0_0_80px_rgba(6,182,212,0.2)] flex flex-col items-center text-center relative overflow-hidden">
             <button onClick={() => setShowDomainSuccess(false)} className="absolute top-6 right-6 text-gray-500 hover:text-white transition bg-white/5 hover:bg-white/10 rounded-full p-2.5 z-10">✕</button>
-            <div className="w-24 h-24 bg-[#050B14] border border-cyan-500/20 rounded-3xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.3)] mb-6 overflow-hidden p-2 transform transition-transform hover:scale-105">
+            <div className="w-24 h-24 bg-[#050B14] border border-cyan-500/20 rounded-3xl flex items-center justify-center shadow-[0_0_30px_rgba(6,182,212,0.3)] mb-6 overflow-hidden p-2 transform transition-transform hover:scale-105 pointer-events-none">
               <img src="/nexio-logo.png" alt="Nexio Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-2xl" />
             </div>
             <h2 className="text-3xl font-black text-white tracking-tight mb-2">Congratulations!</h2>
             <p className="text-sm font-medium text-gray-300 mb-6">Your domain has been successfully registered, <span className="text-cyan-400 font-bold">verified on Arc Testnet</span>!</p>
-            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/50 bg-cyan-500/10 px-6 py-2 mb-8">
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/50 bg-cyan-500/10 px-6 py-2 mb-8 pointer-events-none">
               <span className="text-cyan-400">⚡</span>
               <span className="text-sm font-black text-cyan-400 tracking-widest uppercase">Lifetime Ownership</span>
             </div>
@@ -1113,7 +1141,7 @@ export default function Home() {
               ) : (
                 <div className="mt-4 p-5 rounded-3xl border border-cyan-500/30 bg-cyan-500/10 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex flex-col sm:flex-row items-center gap-4">
-                    <div className="bg-white p-2 rounded-xl shadow-lg shrink-0">
+                    <div className="bg-white p-2 rounded-xl shadow-lg shrink-0 pointer-events-none">
                        <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentLink)}&color=0A1A3F`} alt="Payment Link QR" className="w-20 h-20 rounded-lg" />
                     </div>
                     <div className="flex flex-col w-full text-center sm:text-left">
@@ -1139,7 +1167,7 @@ export default function Home() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md">
           <div className={`w-full max-w-sm rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 shadow-[0_0_50px_rgba(6,182,212,0.15)] ${tc.modalBg}`}>
             <div className="text-center mb-6">
-              <div className="text-4xl mb-4 animate-pulse">⚠️</div>
+              <div className="text-4xl mb-4 animate-pulse pointer-events-none">⚠️</div>
               <h3 className={`text-xl font-black mb-2 ${tc.textMain}`}>Confirm Payment</h3>
               <p className={`text-sm ${tc.textMuted}`}>Please verify the details below before sending. Transactions cannot be reversed.</p>
             </div>
@@ -1256,7 +1284,7 @@ export default function Home() {
 
           <button onClick={() => handleTabSwitch("dailygm")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "dailygm" ? tc.sidebarActive : tc.sidebarInactive}`}>
             <span>Daily GM</span>
-            <span className="text-xl">🔥</span>
+            <span className="text-xl pointer-events-none">🔥</span>
           </button>
           <button onClick={() => handleTabSwitch("domains")} className={`w-full rounded-2xl px-6 py-4 text-left font-black tracking-wide transition-all border ${selectedTab === "domains" ? tc.sidebarActive : tc.sidebarInactive}`}>
             Nexio Domains
@@ -1287,7 +1315,7 @@ export default function Home() {
           
           {wallet && (
             <div className={`hidden sm:flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md ${theme === 'dark' ? 'border-white/5 bg-black/30' : 'border-slate-200 bg-white shadow-sm'}`}>
-              <div className={`w-2 h-2 rounded-full ${isArcTestnet ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'} animate-pulse`}></div>
+              <div className={`w-2 h-2 rounded-full ${isArcTestnet ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'} animate-pulse pointer-events-none`}></div>
               <span className={`text-[10px] font-bold uppercase tracking-widest ${theme === 'dark' ? 'text-gray-400' : 'text-slate-500'}`}>
                 {isArcTestnet ? `Online ⚡ ${networkLatency > 0 ? `${networkLatency}ms` : ''}` : 'Offline'}
               </span>
@@ -1329,13 +1357,13 @@ export default function Home() {
               <div className="space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8">
                   <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-8 relative overflow-hidden group transition-all duration-500 md:hover:-translate-y-1 ${tc.cardBg}`}>
-                    <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110">💵</div>
+                    <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110 pointer-events-none">💵</div>
                     <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-3 md:mb-4 ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>USDC Balance</div>
                     <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{balancesLoading ? "..." : usdcBalance}</div>
                   </div>
 
                   <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-8 relative overflow-hidden group transition-all duration-500 md:hover:-translate-y-1 ${tc.cardBg}`}>
-                    <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110">💶</div>
+                    <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110 pointer-events-none">💶</div>
                     <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-3 md:mb-4 ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>EURC Balance</div>
                     <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{balancesLoading ? "..." : eurcBalance}</div>
                   </div>
@@ -1348,7 +1376,7 @@ export default function Home() {
                   </button>
                   
                   <button onClick={handleOpenRequestModal} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center relative ${tc.actionCard}`}>
-                    <div className="absolute top-2 right-2 md:top-4 md:right-4 w-2 h-2 rounded-full bg-cyan-500 animate-pulse"></div>
+                    <div className="absolute top-2 right-2 md:top-4 md:right-4 w-2 h-2 rounded-full bg-cyan-500 animate-pulse pointer-events-none"></div>
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Request</div>
                     <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>PAYMENT LINK</span>
                   </button>
@@ -1386,24 +1414,24 @@ export default function Home() {
 
                 {/* 100% REAL DEFI VAULT STAKING SECTION */}
                 <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-[0_0_40px_rgba(16,185,129,0.1)] ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-emerald-950/30 border-emerald-500/30' : 'bg-gradient-to-br from-emerald-50 to-white border-emerald-200'}`}>
-                  <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
+                  <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
                   
                   <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${tc.textMuted}`}>
                     <span>Nexio DeFi Vault</span>
-                    <div className="flex gap-2 p-1 rounded-lg bg-black/20 border border-white/5">
+                    <div className="flex gap-2 p-1 rounded-lg bg-black/20 border border-white/5 relative z-10">
                       <button onClick={() => setVaultAsset("USDC")} className={`px-4 py-1.5 rounded-md transition-colors ${vaultAsset === "USDC" ? "bg-cyan-500 text-white shadow-sm" : "hover:bg-white/10"}`}>USDC</button>
                       <button onClick={() => setVaultAsset("EURC")} className={`px-4 py-1.5 rounded-md transition-colors ${vaultAsset === "EURC" ? "bg-emerald-500 text-white shadow-sm" : "hover:bg-white/10"}`}>EURC</button>
                     </div>
                   </div>
 
-                  <div className="flex flex-col mb-8 gap-1">
+                  <div className="flex flex-col mb-8 gap-1 relative z-10">
                      <div className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Your Staked Balance</div>
                      <div className={`text-4xl md:text-5xl font-black tracking-tighter ${vaultAsset === "USDC" ? (theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600') : (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600')}`}>
                        {vaultAsset === "USDC" ? usdcStakedBalance : eurcStakedBalance} <span className="text-xl md:text-2xl text-gray-500">{vaultAsset}</span>
                      </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row items-center gap-3 mt-2">
+                  <div className="flex flex-col sm:flex-row items-center gap-3 mt-2 relative z-10">
                      <div className="relative w-full">
                        <input
                          type="number"
@@ -1441,16 +1469,16 @@ export default function Home() {
 
                 {/* REAL NEXIO LOYALTY POINTS (PTS) SECTION */}
                 <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-xl ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-indigo-950/40 border-indigo-500/30' : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200'}`}>
-                  <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🎯</div>
+                  <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🎯</div>
                   
-                  <div className="mb-6 max-w-[80%]">
+                  <div className="mb-6 max-w-[80%] relative z-10">
                      <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (PTS)</h3>
                      <p className={`text-xs md:text-sm font-medium leading-relaxed ${tc.textMuted}`}>
                         Track your ecosystem engagement. PTS reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
                      </p>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-black/20 p-5 rounded-2xl border border-white/5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-black/20 p-5 rounded-2xl border border-white/5 relative z-10">
                      <div className="flex flex-col gap-4 w-full">
                         <div className="flex justify-between items-center">
                            <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime PTS</span>
@@ -1480,7 +1508,7 @@ export default function Home() {
                     {/* USDC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]"></div>
+                        <div className="w-3 h-3 rounded-full bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.5)] pointer-events-none"></div>
                         <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC</span>
                       </div>
                       <div className="text-right">
@@ -1492,7 +1520,7 @@ export default function Home() {
                     {/* Staked USDC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full border-2 border-cyan-500 bg-transparent shadow-[0_0_10px_rgba(6,182,212,0.5)]"></div>
+                        <div className="w-3 h-3 rounded-full border-2 border-cyan-500 bg-transparent shadow-[0_0_10px_rgba(6,182,212,0.5)] pointer-events-none"></div>
                         <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC <span className="text-[10px] text-gray-500 ml-1">STAKED</span></span>
                       </div>
                       <div className="text-right">
@@ -1504,7 +1532,7 @@ export default function Home() {
                     {/* EURC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                        <div className="w-3 h-3 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.5)] pointer-events-none"></div>
                         <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC</span>
                       </div>
                       <div className="text-right">
@@ -1516,7 +1544,7 @@ export default function Home() {
                     {/* Staked EURC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full border-2 border-emerald-500 bg-transparent shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                        <div className="w-3 h-3 rounded-full border-2 border-emerald-500 bg-transparent shadow-[0_0_10px_rgba(16,185,129,0.5)] pointer-events-none"></div>
                         <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC <span className="text-[10px] text-gray-500 ml-1">STAKED</span></span>
                       </div>
                       <div className="text-right">
@@ -1528,7 +1556,7 @@ export default function Home() {
                     {/* Other */}
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full bg-gray-500"></div>
+                        <div className="w-3 h-3 rounded-full bg-gray-500 pointer-events-none"></div>
                         <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>Other</span>
                       </div>
                       <div className="text-right">
@@ -1550,12 +1578,12 @@ export default function Home() {
                     </div>
                     <div className="flex justify-between text-xs md:text-sm font-black">
                       <div className="flex items-center gap-2">
-                        <div className="w-3 h-3 rounded-full bg-cyan-500"></div>
+                        <div className="w-3 h-3 rounded-full bg-cyan-500 pointer-events-none"></div>
                         <span className={tc.textMain}>USDC <span className={tc.textMuted}>({usdcPercent}%)</span></span>
                       </div>
                       <div className="flex items-center gap-2">
                         <span className={tc.textMain}><span className={tc.textMuted}>({eurcPercent}%)</span> EURC</span>
-                        <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                        <div className="w-3 h-3 rounded-full bg-emerald-500 pointer-events-none"></div>
                       </div>
                     </div>
                   </div>
@@ -1567,10 +1595,10 @@ export default function Home() {
             {selectedTab === "dailygm" && (
               <div className="w-full flex items-center justify-center animate-in fade-in zoom-in-95 duration-500 mt-4 md:mt-10">
                 <div className={`w-full max-w-2xl rounded-3xl md:rounded-[3rem] border p-8 md:p-14 shadow-2xl flex flex-col items-center text-center relative overflow-hidden group gap-6 md:gap-8 ${theme === 'dark' ? 'border-orange-500/20 bg-gradient-to-br from-orange-500/10 to-black backdrop-blur-2xl text-white' : 'border-orange-200 bg-gradient-to-br from-orange-50 to-white text-slate-900'}`}>
-                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 p-4 opacity-5 text-[15rem] md:text-[20rem] group-hover:rotate-12 transition-transform duration-1000">☀️</div>
+                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 p-4 opacity-5 text-[15rem] md:text-[20rem] group-hover:rotate-12 transition-transform duration-1000 pointer-events-none">☀️</div>
                   
                   <div className="flex flex-col items-center z-10">
-                     <div className="text-6xl md:text-7xl mb-4 animate-bounce">{hasCheckedInToday ? "🔥" : "⏳"}</div>
+                     <div className="text-6xl md:text-7xl mb-4 animate-bounce pointer-events-none">{hasCheckedInToday ? "🔥" : "⏳"}</div>
                      <h3 className="text-3xl md:text-4xl font-black mb-3 tracking-tight">Daily GM Protocol</h3>
                      <p className={`text-sm md:text-base font-medium max-w-md ${theme === 'dark' ? 'text-gray-400' : 'text-slate-500'}`}>Establish your presence on the Arc L1 Network. Execute a zero-value smart contract transaction to build your immutable on-chain streak!</p>
                   </div>
@@ -1597,11 +1625,11 @@ export default function Home() {
 
             {selectedTab === "domains" && (
               <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-10 relative overflow-hidden animate-in fade-in zoom-in-95 duration-500 ${theme === 'dark' ? 'border border-cyan-500/20 bg-gradient-to-br from-[#0A1A3F]/60 to-black backdrop-blur-3xl shadow-2xl' : 'border border-cyan-200 bg-gradient-to-br from-cyan-50 to-white shadow-xl'}`}>
-                <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>🌐</div>
+                <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl pointer-events-none ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>🌐</div>
                 <h2 className={`text-2xl md:text-4xl font-black tracking-tight mb-2 md:mb-3 ${tc.textMain}`}>Nexio Web3 Identity</h2>
                 <p className={`text-xs md:text-base font-medium mb-6 md:mb-10 max-w-xl ${tc.textMuted}`}>Register your unique <span className={theme === 'dark' ? 'text-cyan-400 font-bold' : 'text-cyan-600 font-bold'}>.nex</span> username on the blockchain and establish your lifetime identity.</p>
                 
-                <div className={`flex flex-col sm:flex-row items-center gap-3 md:gap-4 w-full bg-black border rounded-3xl sm:rounded-full p-2 pl-4 md:pl-6 transition-shadow ${theme === 'dark' ? 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:shadow-[0_0_40px_rgba(6,182,212,0.2)]' : 'border-cyan-300 shadow-md hover:shadow-lg'}`}>
+                <div className={`flex flex-col sm:flex-row items-center gap-3 md:gap-4 w-full bg-black border rounded-3xl sm:rounded-full p-2 pl-4 md:pl-6 transition-shadow relative z-10 ${theme === 'dark' ? 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:shadow-[0_0_40px_rgba(6,182,212,0.2)]' : 'border-cyan-300 shadow-md hover:shadow-lg'}`}>
                   <span className={`hidden sm:inline-block text-xl font-bold ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>∞</span>
                   <input 
                     type="text" 
@@ -1625,7 +1653,7 @@ export default function Home() {
                 </div>
 
                 {domainAvailable && (
-                  <div className={`mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-between p-5 md:p-6 rounded-3xl animate-in fade-in slide-in-from-bottom-4 duration-500 ${theme === 'dark' ? 'bg-cyan-950/30 border border-cyan-500/30' : 'bg-cyan-50 border border-cyan-200'}`}>
+                  <div className={`mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-between p-5 md:p-6 rounded-3xl animate-in fade-in slide-in-from-bottom-4 duration-500 relative z-10 ${theme === 'dark' ? 'bg-cyan-950/30 border border-cyan-500/30' : 'bg-cyan-50 border border-cyan-200'}`}>
                     <div className="flex items-center gap-4 md:gap-5">
                       <div className={`w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center p-1.5 ${theme === 'dark' ? 'bg-[#050B14] border border-cyan-500/20 shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-white border border-cyan-200 shadow-sm'}`}>
                         <img src="/nexio-logo.png" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-lg md:rounded-xl" />
@@ -1653,7 +1681,7 @@ export default function Home() {
 
                 {!registeredDomain ? (
                   <div className="text-center z-10 max-w-lg px-4">
-                    <div className="text-5xl md:text-7xl mb-4 md:mb-6 animate-pulse">🪪</div>
+                    <div className="text-5xl md:text-7xl mb-4 md:mb-6 animate-pulse pointer-events-none">🪪</div>
                     <h2 className={`text-2xl md:text-3xl font-black mb-3 md:mb-4 ${tc.textMain}`}>Unlock Your Nexio Pass</h2>
                     <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>You need to register a .nex domain to generate your exclusive Web3 Holographic Identity Card.</p>
                     <button onClick={() => handleTabSwitch("domains")} className="bg-cyan-500 hover:bg-cyan-600 text-white font-black px-6 py-3 md:px-8 md:py-4 rounded-full transition-all active:scale-95 shadow-lg text-sm md:text-base">
@@ -1739,7 +1767,7 @@ export default function Home() {
                 <div className="space-y-3 md:space-y-4">
                   {txHistory.length === 0 ? (
                     <div className="text-center py-10 md:py-20">
-                      <div className="text-5xl md:text-6xl mb-3 md:mb-4 opacity-50">📭</div>
+                      <div className="text-5xl md:text-6xl mb-3 md:mb-4 opacity-50 pointer-events-none">📭</div>
                       <div className={`font-bold text-base md:text-lg ${tc.textMuted}`}>No blockchain activity found.</div>
                     </div>
                   ) : (
@@ -1781,7 +1809,7 @@ export default function Home() {
             {selectedTab === "learn" && (
               <div className="space-y-6 md:space-y-8 animate-in fade-in duration-500">
                 <div className={`rounded-3xl md:rounded-[2.5rem] border p-6 md:p-12 shadow-2xl relative overflow-hidden mb-6 md:mb-8 ${theme === 'dark' ? 'border-cyan-500/20 bg-gradient-to-br from-[#0A1A3F]/80 to-black backdrop-blur-3xl' : 'border-cyan-200 bg-gradient-to-br from-cyan-50 to-white'}`}>
-                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>🏦</div>
+                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>🏦</div>
                   <h2 className={`text-3xl md:text-5xl font-black mb-4 md:mb-6 tracking-tighter drop-shadow-sm ${tc.textMain}`}>What is Nexio?</h2>
                   <p className={`text-sm md:text-xl font-medium leading-relaxed max-w-3xl mb-6 md:mb-10 ${tc.textDesc}`}>
                     Nexio is an advanced Web3 Stablecoin Management and Identity Protocol built on the Arc Network. We make blockchain payments as simple as traditional banking by replacing complex addresses with human-readable <strong>.nex</strong> domains and offering enterprise-grade batch payment tools.
@@ -1789,22 +1817,22 @@ export default function Home() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mt-8">
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-                      <div className="text-2xl mb-2">🌐</div>
+                      <div className="text-2xl mb-2 pointer-events-none">🌐</div>
                       <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Name Service</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Register a permanent .nex domain to replace your long 0x wallet address.</p>
                     </div>
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-                      <div className="text-2xl mb-2">💸</div>
+                      <div className="text-2xl mb-2 pointer-events-none">💸</div>
                       <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Batch Transfers</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Send USDC or EURC to multiple domains simultaneously with our domain-resolved engine.</p>
                     </div>
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-                      <div className="text-2xl mb-2">🔗</div>
+                      <div className="text-2xl mb-2 pointer-events-none">🔗</div>
                       <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Automated Invoicing</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Generate shareable payment links that auto-fill the exact recipient, asset, and amount.</p>
                     </div>
                     <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
-                      <div className="text-2xl mb-2">🪪</div>
+                      <div className="text-2xl mb-2 pointer-events-none">🪪</div>
                       <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Pass & Daily GM</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Build an on-chain streak and unlock your verifiable, holographic Web3 Identity Card.</p>
                     </div>
@@ -1812,7 +1840,7 @@ export default function Home() {
                 </div>
 
                 <div className={`rounded-3xl md:rounded-[2.5rem] border p-6 md:p-12 shadow-2xl relative overflow-hidden ${theme === 'dark' ? 'border-blue-500/20 bg-gradient-to-br from-[#0A1A3F]/80 to-black backdrop-blur-3xl' : 'border-blue-200 bg-gradient-to-br from-blue-50 to-white'}`}>
-                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>📖</div>
+                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.03]'}`}>📖</div>
                   <h2 className={`text-3xl md:text-5xl font-black mb-4 md:mb-6 tracking-tighter drop-shadow-sm ${tc.textMain}`}>Built on Arc Network</h2>
                   <p className={`text-sm md:text-xl font-medium leading-relaxed max-w-3xl mb-6 md:mb-10 ${tc.textDesc}`}>
                     Nexio relies on Arc, an enterprise-grade L1 blockchain designed specifically for stablecoin management, rapid payments, and decentralized finance. It brings together fiat-backed assets and powerful infrastructure to make global money movement seamless.
