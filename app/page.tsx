@@ -49,6 +49,7 @@ export default function Home() {
 
   const [showSendModal, setShowSendModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showReceiveModal, setShowReceiveModal] = useState(false); // NEW STATE FOR RECEIVE MODAL
   const [isBatchMode, setIsBatchMode] = useState(false);
   const [sendAddress, setSendAddress] = useState("");
   const [sendAmount, setSendAmount] = useState("");
@@ -162,7 +163,6 @@ export default function Home() {
     }
   };
 
-  // 🚀 FIXED: Using wallet provider for fetching balances to avoid RPC rate limits
   const fetchBalances = useCallback(async (address: string, isSilentRefresh = false) => {
     if (!address) return;
     try {
@@ -309,6 +309,7 @@ export default function Home() {
         setSendAddress("");
         setSendMemo("");
         setShowConfirmModal(false);
+        setShowReceiveModal(false);
         setTxHistory([]);
         showMessage("Wallet Disconnected");
       } else {
@@ -408,6 +409,7 @@ export default function Home() {
     setSendAddress("");
     setSendMemo("");
     setShowConfirmModal(false);
+    setShowReceiveModal(false);
     setTxHistory([]);
     showMessage("Wallet Disconnected");
   };
@@ -415,7 +417,7 @@ export default function Home() {
   const copyAddress = async () => {
     if (!wallet) return showMessage("Connect wallet first");
     await navigator.clipboard.writeText(wallet);
-    showMessage("Address Copied");
+    showMessage("Address Copied! 📋");
   };
 
   const openFaucet = () => window.open(ARC_FAUCET, "_blank", "noopener,noreferrer");
@@ -485,7 +487,6 @@ export default function Home() {
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
 
-      // 🚀 FIXED: Using internal provider instead of external RPC for domain resolving
       const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
       
       const resolvedAddresses: string[] = [];
@@ -528,7 +529,6 @@ export default function Home() {
         const currentTarget = resolvedAddresses[i];
         const displayTarget = addresses[i];
 
-        // 🚀 FIXED: Removed 8-second delay timer. Only kept a 500ms safety pause so the UI doesn't freeze.
         if (i > 0) {
           showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`);
           await sleep(500); 
@@ -641,7 +641,6 @@ export default function Home() {
     }
   };
 
-  // 🚀 FIXED: Using wallet provider to check domain availability, avoiding RPC rate limit errors
   const handleSearchDomain = async () => {
     let cleanSearch = domainSearch.trim().toLowerCase();
     cleanSearch = cleanSearch.replace(/\.nex$/, "");
@@ -867,6 +866,37 @@ export default function Home() {
         </div>
       )}
 
+      {/* NEW RECEIVE MODAL WITH REAL QR CODE */}
+      {showReceiveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div className={`w-full max-w-sm rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 shadow-[0_0_50px_rgba(6,182,212,0.15)] ${tc.modalBg}`}>
+            <div className="flex items-center justify-between mb-6">
+              <h3 className={`text-2xl font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Receive Funds</h3>
+              <button onClick={() => setShowReceiveModal(false)} className="text-gray-400 hover:text-cyan-500 transition rounded-full p-2.5">✕</button>
+            </div>
+            
+            <div className="flex flex-col items-center justify-center space-y-6">
+              <div className="bg-white p-3 rounded-3xl shadow-xl border border-gray-200">
+                {/* 100% Real Live QR Code generated using public API */}
+                <img src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${wallet}&color=0A1A3F`} alt="Wallet QR Code" className="w-48 h-48 rounded-2xl" />
+              </div>
+              
+              <div className="text-center w-full">
+                <p className={`text-xs font-bold uppercase tracking-widest mb-3 ${tc.textMuted}`}>Your Wallet Address</p>
+                <div className={`text-sm font-mono break-all p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/50 border-white/10 text-cyan-400' : 'bg-slate-50 border-slate-200 text-cyan-700'}`}>
+                  {wallet}
+                </div>
+              </div>
+              
+              <button onClick={copyAddress} className="w-full rounded-2xl bg-cyan-500 text-white hover:bg-cyan-400 py-4 font-black text-lg transition-all active:scale-95 flex items-center justify-center gap-2 shadow-xl">
+                <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy Address
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showRequestModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div className={`w-full max-w-md rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 ${tc.modalBg}`}>
@@ -897,14 +927,23 @@ export default function Home() {
                   Generate Link
                 </button>
               ) : (
-                <div className="mt-4 p-4 rounded-2xl border border-cyan-500/30 bg-cyan-500/10 flex flex-col gap-3 animate-in fade-in slide-in-from-bottom-2">
-                  <div className="text-xs font-bold text-cyan-500 uppercase tracking-widest">Share this unique link:</div>
-                  <div className="text-xs font-mono break-all text-gray-300 bg-black/50 p-3 rounded-xl border border-white/5">
-                    {paymentLink}
+                <div className="mt-4 p-5 rounded-3xl border border-cyan-500/30 bg-cyan-500/10 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2">
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Real Live QR Code for the Payment Link */}
+                    <div className="bg-white p-2 rounded-xl shadow-lg shrink-0">
+                       <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentLink)}&color=0A1A3F`} alt="Payment Link QR" className="w-20 h-20 rounded-lg" />
+                    </div>
+                    <div className="flex flex-col w-full text-center sm:text-left">
+                       <div className="text-xs font-bold text-cyan-500 uppercase tracking-widest mb-1">Scan or Share Link</div>
+                       <div className="text-[10px] sm:text-xs font-mono break-all text-gray-300 bg-black/50 p-2.5 rounded-xl border border-white/5">
+                         {paymentLink}
+                       </div>
+                    </div>
                   </div>
-                  <button onClick={copyPaymentLink} className="w-full rounded-xl bg-white text-black hover:bg-gray-200 py-3 font-black transition-all active:scale-95 flex items-center justify-center gap-2">
+                  
+                  <button onClick={copyPaymentLink} className="w-full rounded-xl bg-white text-black hover:bg-gray-200 py-3 font-black transition-all active:scale-95 flex items-center justify-center gap-2 mt-1">
                     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                    Copy Link
+                    Copy Payment Link
                   </button>
                 </div>
               )}
@@ -1125,9 +1164,12 @@ export default function Home() {
                     <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>PAYMENT LINK</span>
                   </button>
 
-                  <button onClick={copyAddress} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center ${tc.actionCard}`}>
+                  <button onClick={() => {
+                    if(!wallet) return showMessage("Connect wallet first");
+                    setShowReceiveModal(true); // TRIGGER RECEIVE MODAL INSTEAD OF JUST COPY
+                  }} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center ${tc.actionCard}`}>
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Receive</div>
-                    <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>COPY ADDRESS</span>
+                    <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>QR CODE PAY</span>
                   </button>
 
                   <button onClick={openFaucet} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center ${tc.actionCard}`}>
