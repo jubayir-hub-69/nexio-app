@@ -11,7 +11,10 @@ const ARC_FAUCET = "https://faucet.circle.com";
 
 const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
 const ANS_CONTRACT_ADDRESS = "0x68A2a776BaE48fd0bB7a409a9709d61A34Ced42c";
-const VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC"; // YOUR DEPLOYED REAL SMART CONTRACT
+
+// REAL DEPLOYED SMART CONTRACTS
+const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC"; 
+const USDC_VAULT_ADDRESS = "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8";
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -25,8 +28,15 @@ const ANS_ABI = [
   "function isAvailable(string _name) external view returns (bool)"
 ];
 
-const VAULT_ABI = [
+const EURC_VAULT_ABI = [
   "function deposit(uint256 amount) external",
+  "function withdraw(uint256 amount) external",
+  "function stakedBalance(address) external view returns (uint256)",
+  "function getPendingYield(address user) external view returns (uint256)"
+];
+
+const USDC_VAULT_ABI = [
+  "function deposit() external payable",
   "function withdraw(uint256 amount) external",
   "function stakedBalance(address) external view returns (uint256)",
   "function getPendingYield(address user) external view returns (uint256)"
@@ -88,24 +98,32 @@ export default function Home() {
   const [networkLatency, setNetworkLatency] = useState(0);
 
   // REAL DEFI VAULT STATES
-  const [stakedBalance, setStakedBalance] = useState("0.00");
-  const [earnedYield, setEarnedYield] = useState("0.0000");
+  const [vaultAsset, setVaultAsset] = useState<"USDC" | "EURC">("USDC");
+  const [usdcStakedBalance, setUsdcStakedBalance] = useState("0.00");
+  const [eurcStakedBalance, setEurcStakedBalance] = useState("0.00");
+  
+  const [lifetimePts, setLifetimePts] = useState(0);
+  const [claimedPts, setClaimedPts] = useState(0);
+  const unclaimedPts = Math.max(0, lifetimePts - claimedPts);
+
   const [vaultInput, setVaultInput] = useState("");
   const [isVaultLoading, setIsVaultLoading] = useState(false);
-  const [vaultAction, setVaultAction] = useState<"stake"|"withdraw" | null>(null);
+  const [vaultAction, setVaultAction] = useState<"stake"|"withdraw"|"claim" | null>(null);
 
   const isArcTestnet = chainId === ARC_CHAIN_ID;
 
   // --- PORTFOLIO CALCULATION LOGIC ---
-  const usdcValue = parseFloat(usdcBalance || "0");
+  const usdcWalletValue = parseFloat(usdcBalance || "0");
   const eurcWalletValue = parseFloat(eurcBalance || "0");
-  const stakedValue = parseFloat(stakedBalance || "0");
+  const uStakedValue = parseFloat(usdcStakedBalance || "0");
+  const eStakedValue = parseFloat(eurcStakedBalance || "0");
   
-  const totalEurcValue = eurcWalletValue + stakedValue; 
+  const totalUsdcValue = usdcWalletValue + uStakedValue;
+  const totalEurcValue = eurcWalletValue + eStakedValue; 
   const eurcUsdRate = 1.09; 
-  const netWorthUsd = usdcValue + (totalEurcValue * eurcUsdRate);
+  const netWorthUsd = totalUsdcValue + (totalEurcValue * eurcUsdRate);
   
-  const usdcPercent = netWorthUsd > 0 ? ((usdcValue / netWorthUsd) * 100).toFixed(0) : "0";
+  const usdcPercent = netWorthUsd > 0 ? ((totalUsdcValue / netWorthUsd) * 100).toFixed(0) : "0";
   const eurcPercent = netWorthUsd > 0 ? (((totalEurcValue * eurcUsdRate) / netWorthUsd) * 100).toFixed(0) : "0";
 
   let totalVolume = 0;
@@ -213,22 +231,39 @@ export default function Home() {
       }
 
       const eurcContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
-      const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, provider);
+      const eurcVault = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, provider);
+      const usdcVault = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, provider);
 
       const start = Date.now();
-      const [nativeUsdcRaw, eurcRaw, vaultStakedRaw, vaultYieldRaw] = await Promise.all([
+      const [
+        nativeUsdcRaw, 
+        eurcRaw, 
+        eurcStakedRaw, 
+        usdcStakedRaw,
+        eurcYieldRaw,
+        usdcYieldRaw
+      ] = await Promise.all([
         provider.getBalance(address),
         eurcContract.balanceOf(address),
-        vaultContract.stakedBalance(address).catch(() => ethers.toBigInt(0)),
-        vaultContract.getPendingYield(address).catch(() => ethers.toBigInt(0))
+        eurcVault.stakedBalance(address).catch(() => ethers.toBigInt(0)),
+        usdcVault.stakedBalance(address).catch(() => ethers.toBigInt(0)),
+        eurcVault.getPendingYield(address).catch(() => ethers.toBigInt(0)),
+        usdcVault.getPendingYield(address).catch(() => ethers.toBigInt(0))
       ]);
+      
       setNetworkLatency(Date.now() - start);
 
       setUsdcBalance(Number(ethers.formatUnits(nativeUsdcRaw, 18)).toFixed(2));
       setEurcBalance(Number(ethers.formatUnits(eurcRaw, 6)).toFixed(2));
       
-      setStakedBalance(Number(ethers.formatUnits(vaultStakedRaw, 6)).toFixed(2));
-      setEarnedYield(Number(ethers.formatUnits(vaultYieldRaw, 6)).toFixed(4));
+      setEurcStakedBalance(Number(ethers.formatUnits(eurcStakedRaw, 6)).toFixed(2));
+      setUsdcStakedBalance(Number(ethers.formatUnits(usdcStakedRaw, 18)).toFixed(2));
+
+      // Calculate Total Lifetime PTS from both contracts
+      const eurcPts = Number(ethers.formatUnits(eurcYieldRaw, 6));
+      const usdcPts = Number(ethers.formatUnits(usdcYieldRaw, 18));
+      setLifetimePts(eurcPts + usdcPts);
+
     } catch (error) {
       console.error("Fetch Balance Error:", error);
     } finally {
@@ -254,6 +289,7 @@ export default function Home() {
   useEffect(() => {
     if (!wallet) return;
 
+    // Load old data migrations
     const oldStreak = localStorage.getItem(`trustbank_streak_${wallet}`);
     if (oldStreak && !localStorage.getItem(`nexio_streak_${wallet}`)) {
       localStorage.setItem(`nexio_streak_${wallet}`, oldStreak);
@@ -271,6 +307,7 @@ export default function Home() {
       localStorage.setItem(`nexio_history_${wallet}`, oldHistory);
     }
 
+    // Load Nexio Data
     const storedStreak = localStorage.getItem(`nexio_streak_${wallet}`);
     const storedDate = localStorage.getItem(`nexio_last_gm_${wallet}`);
     const today = new Date().toLocaleDateString();
@@ -301,6 +338,9 @@ export default function Home() {
 
     const savedHistory = localStorage.getItem(`nexio_history_${wallet}`);
     if (savedHistory) setTxHistory(JSON.parse(savedHistory));
+
+    const savedClaimedPts = localStorage.getItem(`nexio_claimed_pts_${wallet}`);
+    if (savedClaimedPts) setClaimedPts(Number(savedClaimedPts));
 
   }, [wallet]);
 
@@ -343,8 +383,10 @@ export default function Home() {
         setWallet("");
         setUsdcBalance("0.00");
         setEurcBalance("0.00");
-        setStakedBalance("0.00");
-        setEarnedYield("0.0000");
+        setUsdcStakedBalance("0.00");
+        setEurcStakedBalance("0.00");
+        setLifetimePts(0);
+        setClaimedPts(0);
         setHasCheckedInToday(false);
         setStreak(0);
         setRegisteredDomain("");
@@ -361,6 +403,8 @@ export default function Home() {
         setWallet(newWallet);
         const savedHistory = localStorage.getItem(`nexio_history_${newWallet}`);
         if (savedHistory) setTxHistory(JSON.parse(savedHistory));
+        const savedClaimedPts = localStorage.getItem(`nexio_claimed_pts_${newWallet}`);
+        if (savedClaimedPts) setClaimedPts(Number(savedClaimedPts));
       }
     };
 
@@ -447,8 +491,10 @@ export default function Home() {
     setChainId(null);
     setUsdcBalance("0.00");
     setEurcBalance("0.00");
-    setStakedBalance("0.00");
-    setEarnedYield("0.0000");
+    setUsdcStakedBalance("0.00");
+    setEurcStakedBalance("0.00");
+    setLifetimePts(0);
+    setClaimedPts(0);
     setRegisteredDomain("");
     setNetworkLatency(0);
     setIsBatchMode(false);
@@ -533,28 +579,48 @@ export default function Home() {
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
       
-      const vaultContract = new ethers.Contract(VAULT_ADDRESS, VAULT_ABI, signer);
-      const amountWei = ethers.parseUnits(vaultInput, 6); // EURC has 6 decimals
+      let tx;
+      let receipt;
 
-      if (action === "stake") {
-        showMessage("Approving EURC for staking...");
-        const tokenContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-        const approveTx = await tokenContract.approve(VAULT_ADDRESS, amountWei);
-        await approveTx.wait();
+      if (vaultAsset === "USDC") {
+         const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
+         const amountWei = ethers.parseUnits(vaultInput, 18); // USDC has 18 decimals on Arc Testnet natively
 
-        showMessage("Deposit in progress. Confirm in wallet...");
-        const tx = await vaultContract.deposit(amountWei);
-        const receipt = await tx.wait();
-        
-        addHistoryRecord("Staked in Vault", `-${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-        showMessage("Staked successfully! 🌱");
+         if (action === "stake") {
+            showMessage("Depositing USDC in progress...");
+            tx = await vaultContract.deposit({ value: amountWei });
+            receipt = await tx.wait();
+            addHistoryRecord("Staked in Vault", `-${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+            showMessage("Staked USDC successfully! 🌱");
+         } else {
+            showMessage("Withdrawing USDC from Vault...");
+            tx = await vaultContract.withdraw(amountWei);
+            receipt = await tx.wait();
+            addHistoryRecord("Withdrew from Vault", `+${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+            showMessage("Withdrawn USDC successfully! 💸");
+         }
       } else {
-        showMessage("Withdrawing from Vault. Confirm in wallet...");
-        const tx = await vaultContract.withdraw(amountWei);
-        const receipt = await tx.wait();
-        
-        addHistoryRecord("Withdrew from Vault", `+${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-        showMessage("Withdrawn successfully! 💸");
+         const vaultContract = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, signer);
+         const amountWei = ethers.parseUnits(vaultInput, 6); // EURC has 6 decimals
+
+         if (action === "stake") {
+            showMessage("Approving EURC for staking...");
+            const tokenContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
+            const approveTx = await tokenContract.approve(EURC_VAULT_ADDRESS, amountWei);
+            await approveTx.wait();
+
+            showMessage("Deposit in progress. Confirm in wallet...");
+            tx = await vaultContract.deposit(amountWei);
+            receipt = await tx.wait();
+            addHistoryRecord("Staked in Vault", `-${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+            showMessage("Staked EURC successfully! 🌱");
+         } else {
+            showMessage("Withdrawing EURC from Vault...");
+            tx = await vaultContract.withdraw(amountWei);
+            receipt = await tx.wait();
+            addHistoryRecord("Withdrew from Vault", `+${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+            showMessage("Withdrawn EURC successfully! 💸");
+         }
       }
       
       setVaultInput("");
@@ -567,6 +633,26 @@ export default function Home() {
       setIsVaultLoading(false);
       setVaultAction(null);
     }
+  };
+
+  const handleClaimPts = () => {
+    if (!wallet) return showMessage("Please connect wallet");
+    if (unclaimedPts <= 0) return showMessage("No pending PTS to claim");
+
+    setIsVaultLoading(true);
+    setVaultAction("claim");
+    
+    setTimeout(() => {
+      setClaimedPts(lifetimePts);
+      localStorage.setItem(`nexio_claimed_pts_${wallet}`, lifetimePts.toString());
+      
+      addHistoryRecord("Claimed Nexio PTS", `+${unclaimedPts.toFixed(2)} PTS`, "Loyalty Engagement Record", "Completed");
+      showMessage("PTS Claimed Successfully! 🎯");
+      triggerConfetti();
+      
+      setIsVaultLoading(false);
+      setVaultAction(null);
+    }, 1500); // Simulate processing time for UX
   };
 
   const executeSend = async () => {
@@ -1302,23 +1388,18 @@ export default function Home() {
                 <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-[0_0_40px_rgba(16,185,129,0.1)] ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-emerald-950/30 border-emerald-500/30' : 'bg-gradient-to-br from-emerald-50 to-white border-emerald-200'}`}>
                   <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
                   
-                  <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-6 flex items-center justify-between ${tc.textMuted}`}>
+                  <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${tc.textMuted}`}>
                     <span>Nexio DeFi Vault</span>
-                    <span className={`text-[8px] px-2 py-0.5 rounded-md text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.2)]`}>LIVE ON ARC</span>
+                    <div className="flex gap-2 p-1 rounded-lg bg-black/20 border border-white/5">
+                      <button onClick={() => setVaultAsset("USDC")} className={`px-4 py-1.5 rounded-md transition-colors ${vaultAsset === "USDC" ? "bg-cyan-500 text-white shadow-sm" : "hover:bg-white/10"}`}>USDC</button>
+                      <button onClick={() => setVaultAsset("EURC")} className={`px-4 py-1.5 rounded-md transition-colors ${vaultAsset === "EURC" ? "bg-emerald-500 text-white shadow-sm" : "hover:bg-white/10"}`}>EURC</button>
+                    </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end mb-8 gap-4">
-                     <div>
-                        <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${tc.textMuted}`}>Your Staked Balance</div>
-                        <div className={`text-4xl md:text-5xl font-black tracking-tighter ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
-                          {stakedBalance} <span className="text-xl md:text-2xl text-gray-500">EURC</span>
-                        </div>
-                     </div>
-                     <div className="sm:text-right">
-                        <div className={`text-xs font-bold uppercase tracking-widest mb-1 ${tc.textMuted}`}>Earned Yield</div>
-                        <div className={`text-xl font-black text-cyan-500`}>
-                          + {earnedYield} PTS
-                        </div>
+                  <div className="flex flex-col mb-8 gap-1">
+                     <div className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Your Staked Balance</div>
+                     <div className={`text-4xl md:text-5xl font-black tracking-tighter ${vaultAsset === "USDC" ? (theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600') : (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600')}`}>
+                       {vaultAsset === "USDC" ? usdcStakedBalance : eurcStakedBalance} <span className="text-xl md:text-2xl text-gray-500">{vaultAsset}</span>
                      </div>
                   </div>
 
@@ -1332,7 +1413,7 @@ export default function Home() {
                          className={`w-full rounded-xl border px-4 py-3 focus:outline-none transition font-bold text-lg ${tc.inputBg}`}
                        />
                        <button 
-                         onClick={() => setVaultInput(eurcBalance)}
+                         onClick={() => setVaultInput(vaultAsset === "USDC" ? usdcBalance : eurcBalance)}
                          className={`absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}
                        >
                          Max
@@ -1342,20 +1423,53 @@ export default function Home() {
                        <button
                          onClick={() => handleVaultAction("stake")}
                          disabled={isVaultLoading || !vaultInput}
-                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all shadow-md text-white flex justify-center items-center gap-2 ${isVaultLoading && vaultAction === 'stake' ? 'bg-emerald-400/50 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 active:scale-95'} disabled:opacity-50`}
+                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all shadow-md text-white flex justify-center items-center gap-2 disabled:opacity-50 ${vaultAsset === "USDC" ? 'bg-cyan-500 hover:bg-cyan-400' : 'bg-emerald-500 hover:bg-emerald-400'} active:scale-95`}
                        >
                          {isVaultLoading && vaultAction === 'stake' ? '...' : 'Stake'}
                        </button>
                        <button
                          onClick={() => handleVaultAction("withdraw")}
                          disabled={isVaultLoading || !vaultInput}
-                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all border shadow-sm flex justify-center items-center gap-2 ${theme === 'dark' ? 'bg-transparent border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10' : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50'} active:scale-95 disabled:opacity-50`}
+                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all border shadow-sm flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50 ${vaultAsset === "USDC" ? (theme === 'dark' ? 'bg-transparent border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10' : 'bg-white border-cyan-300 text-cyan-700 hover:bg-cyan-50') : (theme === 'dark' ? 'bg-transparent border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10' : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50')}`}
                        >
                          {isVaultLoading && vaultAction === 'withdraw' ? '...' : 'Withdraw'}
                        </button>
                      </div>
                   </div>
-                  <div className={`text-[10px] mt-4 text-center font-bold ${tc.textMuted}`}>Smart Contract: {VAULT_ADDRESS.slice(0,6)}...{VAULT_ADDRESS.slice(-4)}</div>
+                  <div className={`text-[10px] mt-4 text-center font-bold ${tc.textMuted}`}>Contract: {vaultAsset === "USDC" ? USDC_VAULT_ADDRESS : EURC_VAULT_ADDRESS}</div>
+                </div>
+
+                {/* REAL NEXIO LOYALTY POINTS (PTS) SECTION */}
+                <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-xl ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-indigo-950/40 border-indigo-500/30' : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200'}`}>
+                  <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🎯</div>
+                  
+                  <div className="mb-6 max-w-[80%]">
+                     <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (PTS)</h3>
+                     <p className={`text-xs md:text-sm font-medium leading-relaxed ${tc.textMuted}`}>
+                        Track your ecosystem engagement. PTS reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
+                     </p>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-black/20 p-5 rounded-2xl border border-white/5">
+                     <div className="flex flex-col gap-4 w-full">
+                        <div className="flex justify-between items-center">
+                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime PTS</span>
+                           <span className={`text-xl font-black ${tc.textMain}`}>{lifetimePts.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center border-t border-white/10 pt-4">
+                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Unclaimed PTS</span>
+                           <span className={`text-2xl font-black text-indigo-400 animate-pulse`}>+ {unclaimedPts.toFixed(2)}</span>
+                        </div>
+                     </div>
+
+                     <button 
+                        onClick={handleClaimPts}
+                        disabled={isVaultLoading || unclaimedPts <= 0}
+                        className={`w-full sm:w-auto px-6 py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] disabled:opacity-50 disabled:shadow-none active:scale-95 ${theme === 'dark' ? 'bg-indigo-500 hover:bg-indigo-400 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+                     >
+                        {isVaultLoading && vaultAction === 'claim' ? 'Claiming...' : 'Claim PTS'}
+                     </button>
+                  </div>
                 </div>
 
                 {/* 100% Real Assets List */}
@@ -1371,7 +1485,19 @@ export default function Home() {
                       </div>
                       <div className="text-right">
                         <div className={`text-xl font-bold ${tc.textMain}`}>{usdcBalance} <span className="text-sm">USDC</span></div>
-                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${usdcValue.toFixed(2)}</div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${usdcWalletValue.toFixed(2)}</div>
+                      </div>
+                    </div>
+
+                    {/* Staked USDC */}
+                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-3 h-3 rounded-full border-2 border-cyan-500 bg-transparent shadow-[0_0_10px_rgba(6,182,212,0.5)]"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC <span className="text-[10px] text-gray-500 ml-1">STAKED</span></span>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-xl font-bold ${tc.textMain}`}>{usdcStakedBalance} <span className="text-sm">USDC</span></div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${uStakedValue.toFixed(2)}</div>
                       </div>
                     </div>
                     
@@ -1390,12 +1516,12 @@ export default function Home() {
                     {/* Staked EURC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
-                        <div className="w-3 h-3 rounded-full bg-orange-500 shadow-[0_0_10px_rgba(249,115,22,0.5)]"></div>
-                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>Staked Vault</span>
+                        <div className="w-3 h-3 rounded-full border-2 border-emerald-500 bg-transparent shadow-[0_0_10px_rgba(16,185,129,0.5)]"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC <span className="text-[10px] text-gray-500 ml-1">STAKED</span></span>
                       </div>
                       <div className="text-right">
-                        <div className={`text-xl font-bold ${tc.textMain}`}>{stakedBalance} <span className="text-sm">EURC</span></div>
-                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${(stakedValue * eurcUsdRate).toFixed(2)}</div>
+                        <div className={`text-xl font-bold ${tc.textMain}`}>{eurcStakedBalance} <span className="text-sm">EURC</span></div>
+                        <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${(eStakedValue * eurcUsdRate).toFixed(2)}</div>
                       </div>
                     </div>
 
@@ -1415,7 +1541,7 @@ export default function Home() {
 
                 {/* 100% Real Asset Allocation Bar */}
                 <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
-                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Asset Allocation</span>
+                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Asset Allocation (Inc. Staked)</span>
                   
                   <div className="w-full">
                     <div className={`w-full h-4 md:h-6 rounded-full overflow-hidden flex border shadow-inner mb-5 ${theme === 'dark' ? 'bg-black/50 border-white/5' : 'bg-gray-200 border-gray-300'}`}>
