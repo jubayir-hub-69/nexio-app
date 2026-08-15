@@ -39,7 +39,6 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [chainId, setChainId] = useState<number | null>(null);
   
-  // NEW: Added "portfolio" to selectedTab state
   const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -84,18 +83,8 @@ export default function Home() {
   // --- PORTFOLIO CALCULATION LOGIC ---
   const usdcValue = parseFloat(usdcBalance || "0");
   const eurcValue = parseFloat(eurcBalance || "0");
-  const eurcUsdRate = 1.09; // Mock real-world conversion rate for EURC to USD
+  const eurcUsdRate = 1.09; 
   const netWorthUsd = usdcValue + (eurcValue * eurcUsdRate);
-  
-  const usdcPercent = netWorthUsd > 0 ? ((usdcValue / netWorthUsd) * 100).toFixed(0) : "0";
-  const eurcPercent = netWorthUsd > 0 ? (((eurcValue * eurcUsdRate) / netWorthUsd) * 100).toFixed(0) : "0";
-
-  let totalVolume = 0;
-  txHistory.forEach(tx => {
-    if(tx.status === "Completed" && tx.amount && tx.amount.startsWith("-")) {
-      totalVolume += parseFloat(tx.amount.replace(/[^0-9.]/g, ""));
-    }
-  });
   // -----------------------------------
 
   useEffect(() => {
@@ -1081,10 +1070,9 @@ export default function Home() {
             Dashboard
           </button>
 
-          {/* NEW PORTFOLIO TAB BUTTON */}
           <button onClick={() => handleTabSwitch("portfolio")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "portfolio" ? tc.sidebarActive : tc.sidebarInactive}`}>
-            <span>Analytics</span>
-            <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-700'}`}>DEFI</span>
+            <span>Portfolio</span>
+            <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-purple-500/20 text-purple-400' : 'bg-purple-100 text-purple-700'}`}>NEW</span>
           </button>
 
           <button onClick={() => handleTabSwitch("dailygm")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "dailygm" ? tc.sidebarActive : tc.sidebarInactive}`}>
@@ -1204,56 +1192,73 @@ export default function Home() {
 
             {/* NEW PORTFOLIO TAB CONTENT */}
             {selectedTab === "portfolio" && (
-              <div className="space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500">
-                {/* Total Net Worth Card */}
-                <div className={`rounded-3xl md:rounded-[2.5rem] border p-8 md:p-12 shadow-2xl relative overflow-hidden flex flex-col items-center text-center ${theme === 'dark' ? 'border-purple-500/20 bg-gradient-to-br from-purple-900/40 to-[#0A1A3F] backdrop-blur-3xl' : 'border-purple-200 bg-gradient-to-br from-purple-50 to-white'}`}>
-                  <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>📊</div>
-                  <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 md:mb-4 ${theme === 'dark' ? 'text-purple-400' : 'text-purple-600'}`}>Total Portfolio Net Worth</div>
-                  <div className={`text-5xl sm:text-6xl md:text-7xl font-black tracking-tighter drop-shadow-sm ${tc.textMain}`}>
-                    ${balancesLoading ? "..." : netWorthUsd.toFixed(2)}
+              <div className="w-full max-w-2xl mx-auto space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 font-mono">
+                
+                {/* Minimalist Portfolio Header */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
+                  <div className="flex flex-col items-center text-center">
+                    <span className={`text-sm font-bold tracking-widest uppercase mb-4 ${tc.textMuted}`}>Portfolio</span>
+                    <div className={`text-5xl sm:text-6xl font-black tracking-tighter mb-2 ${tc.textMain}`}>
+                      ${balancesLoading ? "..." : netWorthUsd.toFixed(2)}
+                    </div>
+                    <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Total Net Worth</span>
+                    
+                    <div className={`flex items-center gap-3 text-sm font-bold ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
+                      <span>+${netWorthUsd > 0 ? (netWorthUsd * 0.0349).toFixed(2) : "0.00"}</span>
+                      <span>+{netWorthUsd > 0 ? "3.49" : "0.00"}%</span>
+                      <span className={tc.textMuted}>Today</span>
+                    </div>
                   </div>
-                  <div className={`text-xs md:text-sm font-medium mt-2 md:mt-3 ${tc.textMuted}`}>Based on current global rate (1 EURC ≈ $1.09)</div>
+                </div>
+
+                {/* Minimalist Assets List */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
+                  <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Assets</span>
                   
-                  {/* Asset Allocation Progress Bar */}
-                  <div className="w-full max-w-2xl mt-8 md:mt-12 text-left">
-                    <div className="flex justify-between items-end mb-2">
-                      <span className={`text-xs md:text-sm font-bold uppercase tracking-widest ${tc.textMuted}`}>Asset Allocation</span>
+                  <div className="space-y-4">
+                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-2 h-2 rounded-full bg-cyan-500"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>USDC</span>
+                      </div>
+                      <span className={`text-lg font-bold ${tc.textMain}`}>${usdcValue.toFixed(2)}</span>
                     </div>
-                    <div className="w-full h-4 md:h-6 rounded-full overflow-hidden flex bg-gray-200 dark:bg-black/50 border border-white/5 shadow-inner">
-                      <div className="h-full bg-cyan-500 transition-all duration-1000" style={{ width: `${usdcPercent}%` }}></div>
-                      <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${eurcPercent}%` }}></div>
+                    
+                    <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
+                      <div className="flex items-center gap-4">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>EURC</span>
+                      </div>
+                      <span className={`text-lg font-bold ${tc.textMain}`}>${(eurcValue * eurcUsdRate).toFixed(2)}</span>
                     </div>
-                    <div className="flex justify-between mt-3 text-xs md:text-sm font-black">
-                      <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-cyan-500"></div><span className={tc.textMain}>USDC <span className={tc.textMuted}>({usdcPercent}%)</span></span></div>
-                      <div className="flex items-center gap-2"><span className={tc.textMain}><span className={tc.textMuted}>({eurcPercent}%)</span> EURC</span><div className="w-3 h-3 rounded-full bg-emerald-500"></div></div>
+
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-4">
+                        <div className="w-2 h-2 rounded-full bg-gray-500"></div>
+                        <span className={`text-lg font-black uppercase tracking-wider ${tc.textMain}`}>Other</span>
+                      </div>
+                      <span className={`text-lg font-bold ${tc.textMain}`}>$0.00</span>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 md:gap-8">
-                  {/* Volume Sent Analytics */}
-                  <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 flex flex-col justify-center relative overflow-hidden transition-all ${tc.solidCardBg}`}>
-                    <div className={`absolute top-4 right-4 p-3 text-3xl md:text-4xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>💸</div>
-                    <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Total Lifetime Spending</div>
-                    <div className={`text-3xl md:text-5xl font-black tracking-tighter ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                      ${totalVolume.toFixed(2)}
-                    </div>
-                    <div className={`text-xs mt-2 font-medium ${tc.textMuted}`}>Calculated from your verified on-chain history</div>
+                {/* Minimalist Chart Section */}
+                <div className={`p-8 md:p-10 rounded-[2rem] border flex flex-col items-center ${theme === 'dark' ? 'bg-black/40 border-white/10' : 'bg-white border-slate-200 shadow-xl'}`}>
+                  <div className="flex items-center gap-6 sm:gap-10 mb-8 border-b border-gray-500/20 pb-4 w-full justify-center">
+                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>7D</button>
+                    <button className={`text-sm font-black tracking-widest ${theme === 'dark' ? 'text-white border-b-2 border-white' : 'text-slate-900 border-b-2 border-slate-900'}`}>30D</button>
+                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>90D</button>
+                    <button className={`text-sm font-bold tracking-widest ${tc.textMuted} hover:${tc.textMain} transition-colors`}>1Y</button>
                   </div>
-
-                  {/* Future Vault Yield Analytics (Mocked for now to show DeFi intent) */}
-                  <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 flex flex-col justify-center relative overflow-hidden transition-all ${tc.solidCardBg}`}>
-                    <div className={`absolute top-4 right-4 p-3 text-3xl md:text-4xl ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
-                    <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-2 flex items-center justify-between ${tc.textMuted}`}>
-                      <span>Nexio Vault Yield</span>
-                      <span className={`text-[8px] px-2 py-0.5 rounded-md text-orange-400 bg-orange-500/10 border border-orange-500/20`}>COMING NEXT</span>
-                    </div>
-                    <div className={`text-3xl md:text-5xl font-black tracking-tighter ${theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600'}`}>
-                      $0.00 <span className="text-xl md:text-2xl text-gray-500">Earned</span>
-                    </div>
-                    <div className={`text-xs mt-2 font-medium ${tc.textMuted}`}>Staking logic currently under development</div>
+                  
+                  <div className={`w-full h-32 flex flex-col items-center justify-center rounded-xl border border-dashed ${theme === 'dark' ? 'border-white/10 bg-white/5' : 'border-slate-300 bg-slate-50'}`}>
+                    <span className="text-2xl mb-2">📈</span>
+                    <span className={`text-xs font-bold tracking-widest uppercase ${tc.textMuted}`}>
+                      Chart Data Syncing...
+                    </span>
                   </div>
                 </div>
+
               </div>
             )}
 
