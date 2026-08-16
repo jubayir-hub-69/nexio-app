@@ -15,6 +15,7 @@ const ANS_CONTRACT_ADDRESS = "0x68A2a776BaE48fd0bB7a409a9709d61A34Ced42c";
 // REAL DEPLOYED SMART CONTRACTS
 const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC"; 
 const USDC_VAULT_ADDRESS = "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8";
+const SWAP_ADDRESS = "0x19fddFd6a404976180E5c1Db90c350dFFb56aAEe";
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -42,6 +43,11 @@ const USDC_VAULT_ABI = [
   "function getPendingYield(address user) external view returns (uint256)"
 ];
 
+const SWAP_ABI = [
+  "function swapUSDCforEURC() external payable",
+  "function swapEURCforUSDC(uint256 eurcAmount) external"
+];
+
 type ActivityItem = {
   id: number;
   label: string;
@@ -58,7 +64,7 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [chainId, setChainId] = useState<number | null>(null);
   
-  const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
+  const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "swap" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
@@ -109,6 +115,11 @@ export default function Home() {
   const [vaultInput, setVaultInput] = useState("");
   const [isVaultLoading, setIsVaultLoading] = useState(false);
   const [vaultAction, setVaultAction] = useState<"stake"|"withdraw"|"claim" | null>(null);
+
+  // SWAP STATES
+  const [swapInput, setSwapInput] = useState("");
+  const [swapDirection, setSwapDirection] = useState<"USDCtoEURC" | "EURCtoUSDC">("USDCtoEURC");
+  const [isSwapping, setIsSwapping] = useState(false);
 
   const isArcTestnet = chainId === ARC_CHAIN_ID;
 
@@ -289,7 +300,6 @@ export default function Home() {
   useEffect(() => {
     if (!wallet) return;
 
-    // Load old data migrations
     const oldStreak = localStorage.getItem(`trustbank_streak_${wallet}`);
     if (oldStreak && !localStorage.getItem(`nexio_streak_${wallet}`)) {
       localStorage.setItem(`nexio_streak_${wallet}`, oldStreak);
@@ -307,7 +317,6 @@ export default function Home() {
       localStorage.setItem(`nexio_history_${wallet}`, oldHistory);
     }
 
-    // Load Nexio Data
     const storedStreak = localStorage.getItem(`nexio_streak_${wallet}`);
     const storedDate = localStorage.getItem(`nexio_last_gm_${wallet}`);
     const today = new Date().toLocaleDateString();
@@ -419,11 +428,11 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!wallet || !isArcTestnet || isSending || showSendModal || isVaultLoading) return;
+    if (!wallet || !isArcTestnet || isSending || showSendModal || isVaultLoading || isSwapping) return;
     void fetchBalances(wallet);
     const intervalId = setInterval(() => void fetchBalances(wallet, true), 8000);
     return () => clearInterval(intervalId);
-  }, [wallet, isArcTestnet, fetchBalances, isSending, showSendModal, isVaultLoading]);
+  }, [wallet, isArcTestnet, fetchBalances, isSending, showSendModal, isVaultLoading, isSwapping]);
 
   const switchToArcTestnet = async () => {
     const ethereum = getEthereum();
@@ -561,6 +570,98 @@ export default function Home() {
     setShowConfirmModal(true); 
   };
 
+  const executeSend = async () => {
+    setShowConfirmModal(false); 
+    
+    const rawAddresses = isBatchMode ? sendAddress.split(',') : [sendAddress];
+    const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
+
+    if (!isArcTestnet) {
+      showMessage("Switching to Arc Testnet...");
+      const switched = await switchToArcTestnet();
+      if (!switched) return;
+    }
+
+    try {
+      setIsSending(true);
+      const ethereum = getEthereum();
+      const provider = new ethers.BrowserProvider(ethereum);
+      const signer = await provider.getSigner();
+
+      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
+      const resolvedAddresses: string[] = [];
+
+      for (let target of addresses) {
+        const lowerTarget = target.toLowerCase();
+        if (lowerTarget.endsWith(".nex")) {
+          showMessage(`Resolving ${target}...`);
+          const nameOnly = lowerTarget.replace(/\.nex$/, "");
+          try {
+             const resolvedAddress = await ansContract.resolve(nameOnly);
+             if (!resolvedAddress || resolvedAddress === ethers.ZeroAddress) {
+                showMessage(`Domain ${target} is not registered.`);
+                setIsSending(false); return;
+             }
+             resolvedAddresses.push(resolvedAddress);
+          } catch (e) {
+             showMessage(`Domain ${target} could not be resolved.`);
+             setIsSending(false); return;
+          }
+        } else if (ethers.isAddress(target)) {
+          resolvedAddresses.push(target);
+        } else {
+          showMessage(`Invalid address format: ${target}`);
+          setIsSending(false); return;
+        }
+      }
+
+      const memoHex = sendMemo ? ethers.hexlify(ethers.toUtf8Bytes(sendMemo)) : "0x";
+      const memoBytes = sendMemo ? memoHex.replace("0x", "") : "";
+      let successCount = 0;
+
+      for (let i = 0; i < resolvedAddresses.length; i++) {
+        const currentTarget = resolvedAddresses[i];
+        const displayTarget = addresses[i];
+
+        if (i > 0) { showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`); await sleep(500); }
+        if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
+        else showMessage("Confirm transaction in your wallet...");
+
+        try {
+          let tx: any;
+          if (sendAsset === "USDC") {
+            const parsedAmount = ethers.parseUnits(sendAmount, 18);
+            tx = await signer.sendTransaction({ to: currentTarget, value: parsedAmount, data: memoHex });
+          } else {
+            const parsedAmount = ethers.parseUnits(sendAmount, 6);
+            const contract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
+            const transferData = contract.interface.encodeFunctionData("transfer", [currentTarget, parsedAmount]);
+            const finalData = memoBytes ? transferData + memoBytes : transferData;
+            tx = await signer.sendTransaction({ to: EURC_ADDRESS, data: finalData });
+          }
+          
+          showMessage(`Broadcasting ${sendAsset} to network...`);
+          const receipt = await tx.wait();
+          addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `-${sendAmount} ${sendAsset}`, `To ${displayTarget}${sendMemo ? ` (Memo: ${sendMemo})` : ""}`, "Completed", receipt?.hash || "");
+          successCount++;
+        } catch (txError) {
+          addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `${sendAmount} ${sendAsset}`, `Failed: ${displayTarget}`, "Failed");
+        }
+      }
+      
+      if (successCount > 0) {
+        showMessage(isBatchMode ? `Batch Complete: ${successCount}/${resolvedAddresses.length} sent! 🎉` : `Successfully sent ${sendAmount} ${sendAsset}!`);
+        setShowSendModal(false); setSendAddress(""); setSendAmount(""); setSendMemo(""); setIsBatchMode(false);
+      } else {
+        showMessage(isBatchMode ? `Batch Failed: 0/${resolvedAddresses.length} succeeded.` : `Transaction failed or rejected.`);
+      }
+    } catch (error) {
+      showMessage("Operation failed. Check wallet connection.");
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   // REAL DEFI VAULT EXECUTION LOGIC
   const handleVaultAction = async (action: "stake" | "withdraw") => {
     if (!wallet) return showMessage("Please connect wallet first");
@@ -584,7 +685,7 @@ export default function Home() {
 
       if (vaultAsset === "USDC") {
          const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
-         const amountWei = ethers.parseUnits(vaultInput, 18); // USDC has 18 decimals on Arc Testnet natively
+         const amountWei = ethers.parseUnits(vaultInput, 18); 
 
          if (action === "stake") {
             showMessage("Depositing USDC in progress...");
@@ -601,7 +702,7 @@ export default function Home() {
          }
       } else {
          const vaultContract = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, signer);
-         const amountWei = ethers.parseUnits(vaultInput, 6); // EURC has 6 decimals
+         const amountWei = ethers.parseUnits(vaultInput, 6); 
 
          if (action === "stake") {
             showMessage("Approving EURC for staking...");
@@ -635,6 +736,55 @@ export default function Home() {
     }
   };
 
+  // REAL SWAP LOGIC
+  const handleSwap = async () => {
+    if (!wallet) return showMessage("Please connect wallet first");
+    if (!swapInput || parseFloat(swapInput) <= 0) return showMessage("Enter a valid amount");
+    
+    if (!isArcTestnet) {
+      showMessage("Switching to Arc Testnet...");
+      const switched = await switchToArcTestnet();
+      if (!switched) return;
+    }
+
+    setIsSwapping(true);
+    try {
+      const ethereum = getEthereum();
+      const provider = new ethers.BrowserProvider(ethereum);
+      const signer = await provider.getSigner();
+      const swapContract = new ethers.Contract(SWAP_ADDRESS, SWAP_ABI, signer);
+
+      if (swapDirection === "USDCtoEURC") {
+        const amountWei = ethers.parseUnits(swapInput, 18);
+        showMessage("Confirm Swap in wallet (USDC → EURC)...");
+        const tx = await swapContract.swapUSDCforEURC({ value: amountWei });
+        showMessage("Broadcasting Swap...");
+        const receipt = await tx.wait();
+        addHistoryRecord("Nexio Swap", `-${swapInput} USDC`, "Received EURC", "Completed", receipt?.hash || "");
+        showMessage("Swap Successful! 🔄");
+      } else {
+        const amountWei = ethers.parseUnits(swapInput, 6);
+        showMessage("Approving EURC for Swap...");
+        const token = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
+        await (await token.approve(SWAP_ADDRESS, amountWei)).wait();
+        
+        showMessage("Confirm Swap in wallet (EURC → USDC)...");
+        const tx = await swapContract.swapEURCforUSDC(amountWei);
+        showMessage("Broadcasting Swap...");
+        const receipt = await tx.wait();
+        addHistoryRecord("Nexio Swap", `-${swapInput} EURC`, "Received USDC", "Completed", receipt?.hash || "");
+        showMessage("Swap Successful! 🔄");
+      }
+      setSwapInput("");
+      void fetchBalances(wallet);
+    } catch (error: any) {
+      console.error("Swap Error:", error);
+      showMessage(error?.reason || "Swap failed. Check Liquidity or Balance.");
+    } finally {
+      setIsSwapping(false);
+    }
+  };
+
   // REAL TRANSACTION PTS CLAIM LOGIC
   const handleClaimPts = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
@@ -656,7 +806,6 @@ export default function Home() {
 
       showMessage("Confirm PTS Claim in your wallet...");
       
-      // Zero-value transaction to the user's wallet with claim data (costs gas, registers on-chain)
       const memoHex = ethers.hexlify(ethers.toUtf8Bytes(`Nexio PTS Claim: ${unclaimedPts.toFixed(2)}`));
       const tx = await signer.sendTransaction({
         to: wallet,
@@ -680,139 +829,6 @@ export default function Home() {
     } finally {
       setIsVaultLoading(false);
       setVaultAction(null);
-    }
-  };
-
-  const executeSend = async () => {
-    setShowConfirmModal(false); 
-    
-    const rawAddresses = isBatchMode ? sendAddress.split(',') : [sendAddress];
-    const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
-
-    if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
-      const switched = await switchToArcTestnet();
-      if (!switched) return;
-    }
-
-    try {
-      setIsSending(true);
-      const ethereum = getEthereum();
-      const provider = new ethers.BrowserProvider(ethereum);
-      const signer = await provider.getSigner();
-
-      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
-      
-      const resolvedAddresses: string[] = [];
-
-      for (let target of addresses) {
-        const lowerTarget = target.toLowerCase();
-        
-        if (lowerTarget.endsWith(".nex")) {
-          showMessage(`Resolving ${target}...`);
-          const nameOnly = lowerTarget.replace(/\.nex$/, "");
-          
-          try {
-             const resolvedAddress = await ansContract.resolve(nameOnly);
-             if (!resolvedAddress || resolvedAddress === ethers.ZeroAddress) {
-                showMessage(`Domain ${target} is not registered.`);
-                setIsSending(false);
-                return;
-             }
-             resolvedAddresses.push(resolvedAddress);
-          } catch (e) {
-             showMessage(`Domain ${target} could not be resolved.`);
-             setIsSending(false);
-             return;
-          }
-        } else if (ethers.isAddress(target)) {
-          resolvedAddresses.push(target);
-        } else {
-          showMessage(`Invalid address format: ${target}`);
-          setIsSending(false);
-          return;
-        }
-      }
-
-      const memoHex = sendMemo ? ethers.hexlify(ethers.toUtf8Bytes(sendMemo)) : "0x";
-      const memoBytes = sendMemo ? memoHex.replace("0x", "") : "";
-
-      let successCount = 0;
-
-      for (let i = 0; i < resolvedAddresses.length; i++) {
-        const currentTarget = resolvedAddresses[i];
-        const displayTarget = addresses[i];
-
-        if (i > 0) {
-          showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`);
-          await sleep(500); 
-        }
-
-        if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
-        else showMessage("Confirm transaction in your wallet...");
-
-        try {
-          let tx: any;
-
-          if (sendAsset === "USDC") {
-            const parsedAmount = ethers.parseUnits(sendAmount, 18);
-            tx = await signer.sendTransaction({
-              to: currentTarget,
-              value: parsedAmount,
-              data: memoHex
-            });
-          } else {
-            const parsedAmount = ethers.parseUnits(sendAmount, 6);
-            const contract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-            const transferData = contract.interface.encodeFunctionData("transfer", [currentTarget, parsedAmount]);
-            const finalData = memoBytes ? transferData + memoBytes : transferData;
-
-            tx = await signer.sendTransaction({
-              to: EURC_ADDRESS,
-              data: finalData
-            });
-          }
-          
-          showMessage(`Broadcasting ${sendAsset} to network...`);
-          
-          const receipt = await tx.wait();
-
-          addHistoryRecord(
-            isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, 
-            `-${sendAmount} ${sendAsset}`, 
-            `To ${displayTarget}${sendMemo ? ` (Memo: ${sendMemo})` : ""}`, 
-            "Completed", 
-            receipt?.hash || ""
-          );
-          successCount++;
-
-        } catch (txError) {
-          console.error("Transaction Error:", txError);
-          addHistoryRecord(
-            isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, 
-            `${sendAmount} ${sendAsset}`, 
-            `Failed: ${displayTarget}`, 
-            "Failed"
-          );
-        }
-      }
-      
-      if (successCount > 0) {
-        showMessage(isBatchMode ? `Batch Complete: ${successCount}/${resolvedAddresses.length} sent! 🎉` : `Successfully sent ${sendAmount} ${sendAsset}!`);
-        setShowSendModal(false);
-        setSendAddress("");
-        setSendAmount("");
-        setSendMemo("");
-        setIsBatchMode(false);
-      } else {
-        showMessage(isBatchMode ? `Batch Failed: 0/${resolvedAddresses.length} succeeded.` : `Transaction failed or rejected.`);
-      }
-
-    } catch (error) {
-      console.error(error);
-      showMessage("Operation failed. Check wallet connection.");
-    } finally {
-      setIsSending(false);
     }
   };
 
@@ -1282,6 +1298,11 @@ export default function Home() {
             <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-emerald-100 text-emerald-700'}`}>LIVE</span>
           </button>
 
+          <button onClick={() => handleTabSwitch("swap")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "swap" ? tc.sidebarActive : tc.sidebarInactive}`}>
+            <span>Nexio Swap</span>
+            <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-indigo-100 text-indigo-700'}`}>NEW</span>
+          </button>
+
           <button onClick={() => handleTabSwitch("dailygm")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "dailygm" ? tc.sidebarActive : tc.sidebarInactive}`}>
             <span>Daily GM</span>
             <span className="text-xl pointer-events-none">🔥</span>
@@ -1315,7 +1336,7 @@ export default function Home() {
           
           {wallet && (
             <div className={`hidden sm:flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md ${theme === 'dark' ? 'border-white/5 bg-black/30' : 'border-slate-200 bg-white shadow-sm'}`}>
-              <div className={`w-2 h-2 rounded-full ${isArcTestnet ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'} animate-pulse pointer-events-none`}></div>
+              <div className={`w-2 h-2 rounded-full pointer-events-none ${isArcTestnet ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'} animate-pulse`}></div>
               <span className={`text-[10px] font-bold uppercase tracking-widest ${theme === 'dark' ? 'text-gray-400' : 'text-slate-500'}`}>
                 {isArcTestnet ? `Online ⚡ ${networkLatency > 0 ? `${networkLatency}ms` : ''}` : 'Offline'}
               </span>
@@ -1589,6 +1610,44 @@ export default function Home() {
                   </div>
                 </div>
 
+              </div>
+            )}
+
+            {selectedTab === "swap" && (
+              <div className="w-full max-w-lg mx-auto space-y-6 animate-in fade-in zoom-in-95 font-mono mt-4 md:mt-10">
+                 <div className={`p-8 rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
+                    
+                    <div className="text-center mb-8 relative z-10">
+                       <div className="text-6xl mb-4 pointer-events-none">🔄</div>
+                       <h2 className={`text-3xl font-black tracking-tight ${tc.textMain}`}>Nexio Swap</h2>
+                       <p className={`text-xs mt-2 font-bold uppercase tracking-widest ${tc.textMuted}`}>1:1 Stablecoin Routing Pool</p>
+                    </div>
+
+                    <div className="bg-black/20 p-1.5 rounded-2xl flex gap-2 mb-8 border border-white/5 relative z-10">
+                       <button onClick={() => setSwapDirection("USDCtoEURC")} className={`flex-1 py-3.5 rounded-xl font-black text-sm tracking-wide transition-all ${swapDirection === "USDCtoEURC" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>USDC → EURC</button>
+                       <button onClick={() => setSwapDirection("EURCtoUSDC")} className={`flex-1 py-3.5 rounded-xl font-black text-sm tracking-wide transition-all ${swapDirection === "EURCtoUSDC" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>EURC → USDC</button>
+                    </div>
+
+                    <div className="space-y-4 relative z-10">
+                       <div className="relative">
+                         <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You Pay</div>
+                         <input type="number" value={swapInput} onChange={(e) => setSwapInput(e.target.value)} placeholder="0.00" className={`w-full rounded-2xl border px-5 py-5 font-black text-3xl ${tc.inputBg}`} />
+                         <button onClick={() => setSwapInput(swapDirection === "USDCtoEURC" ? usdcBalance : eurcBalance)} className={`absolute right-4 top-[42px] px-3 py-1.5 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}>Max</button>
+                         <div className={`text-[10px] font-bold mt-3 text-right tracking-widest ${tc.textMuted}`}>Balance: {swapDirection === "USDCtoEURC" ? usdcBalance : eurcBalance} {swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}</div>
+                       </div>
+
+                       <div className={`p-6 rounded-2xl border bg-black/40 border-white/5 flex flex-col justify-center`}>
+                         <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You Receive (Est.)</div>
+                         <div className={`text-3xl font-black ${tc.textMain}`}>{swapInput || "0.00"} <span className="text-xl text-gray-500">{swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}</span></div>
+                       </div>
+
+                       <button onClick={handleSwap} disabled={isSwapping || !swapInput || parseFloat(swapInput) <= 0} className={`w-full py-5 mt-4 rounded-2xl font-black text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}>
+                         {isSwapping ? "Processing Swap..." : "Execute Swap"}
+                       </button>
+                    </div>
+                    
+                    <div className={`text-[10px] mt-8 text-center font-bold tracking-widest ${tc.textMuted}`}>Contract: {SWAP_ADDRESS.slice(0,6)}...{SWAP_ADDRESS.slice(-4)}</div>
+                 </div>
               </div>
             )}
 
