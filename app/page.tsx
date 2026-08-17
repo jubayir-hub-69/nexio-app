@@ -1,7 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ethers } from "ethers";
+import {
+  WUSDC_ADDRESS,
+  FACTORY_ADDRESS,
+  ROUTER_ADDRESS,
+  WUSDC_DECIMALS,
+  EURC_DECIMALS,
+  LP_DECIMALS,
+  ERC20_ABI as TOKEN_ABI,
+  WUSDC_ABI,
+  ROUTER_ABI,
+  PAIR_ABI,
+  applySlippage,
+  BALANCE_CACHE_MS,
+  fetchPairState,
+  formatDisplay,
+  formatExact,
+  formatPretty,
+  formatSharePercent,
+  getArcReadProvider,
+  getTxErrorMessage,
+  invalidatePairCache,
+  isAmountDraft,
+  maxNativeSpend,
+  parseAmount,
+  slippageLabel,
+  SLIPPAGE_PRESETS,
+  swapDeadline,
+  underlyingFromLp,
+} from "@/lib/contracts";
 
 const ARC_CHAIN_ID = 5042002;
 const ARC_CHAIN_ID_HEX = "0x4cef52";
@@ -15,12 +44,12 @@ const ANS_CONTRACT_ADDRESS = "0x68A2a776BaE48fd0bB7a409a9709d61A34Ced42c";
 // REAL DEPLOYED SMART CONTRACTS
 const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC"; 
 const USDC_VAULT_ADDRESS = "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8";
-const SWAP_ADDRESS = "0x19fddFd6a404976180E5c1Db90c350dFFb56aAEe";
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
   "function transfer(address to, uint256 amount) returns (bool)",
-  "function approve(address spender, uint256 amount) returns (bool)"
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)"
 ];
 
 const ANS_ABI = [
@@ -43,10 +72,7 @@ const USDC_VAULT_ABI = [
   "function getPendingYield(address user) external view returns (uint256)"
 ];
 
-const SWAP_ABI = [
-  "function swapUSDCforEURC() external payable",
-  "function swapEURCforUSDC(uint256 eurcAmount) external"
-];
+
 
 type ActivityItem = {
   id: number;
@@ -64,13 +90,22 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [chainId, setChainId] = useState<number | null>(null);
   
-  const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "swap" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
+  const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "swap" | "lp" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   const [usdcBalance, setUsdcBalance] = useState("0.00");
   const [eurcBalance, setEurcBalance] = useState("0.00");
+  const [usdcBalanceRaw, setUsdcBalanceRaw] = useState<bigint>(BigInt(0));
+  const [eurcBalanceRaw, setEurcBalanceRaw] = useState<bigint>(BigInt(0));
+  const [wusdcBalanceRaw, setWusdcBalanceRaw] = useState<bigint>(BigInt(0));
   const [balancesLoading, setBalancesLoading] = useState(false);
+  const [balancesReady, setBalancesReady] = useState(false);
+  const balanceCacheRef = useRef({ address: "", at: 0 });
+  const balanceInflightRef = useRef<Promise<void> | null>(null);
+  const txBusyRef = useRef(false);
+  const lastSwapQuoteKeyRef = useRef("");
+  const lastLpQuoteKeyRef = useRef("");
 
   const [showSendModal, setShowSendModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -120,8 +155,39 @@ export default function Home() {
   const [swapInput, setSwapInput] = useState("");
   const [swapDirection, setSwapDirection] = useState<"USDCtoEURC" | "EURCtoUSDC">("USDCtoEURC");
   const [isSwapping, setIsSwapping] = useState(false);
+  const [swapStatus, setSwapStatus] = useState<"approving" | "confirm" | "pending" | null>(null);
+  const [swapQuote, setSwapQuote] = useState("");
+  const [swapQuoteRaw, setSwapQuoteRaw] = useState<bigint>(BigInt(0));
+  const [swapQuoteError, setSwapQuoteError] = useState("");
+  const [slippageBps, setSlippageBps] = useState(100);
+  const [customSlippage, setCustomSlippage] = useState("");
+  const [showSlippage, setShowSlippage] = useState(false);
+
+  // LP STATES
+  const [lpMode, setLpMode] = useState<"add" | "remove">("add");
+  const [lpUsdcInput, setLpUsdcInput] = useState("");
+  const [lpEurcInput, setLpEurcInput] = useState("");
+  const [lpLastEdited, setLpLastEdited] = useState<"usdc" | "eurc">("usdc");
+  const [lpRemoveInput, setLpRemoveInput] = useState("");
+  const [lpRemoveIsMax, setLpRemoveIsMax] = useState(false);
+  const [isLpLoading, setIsLpLoading] = useState(false);
+  const [lpAction, setLpAction] = useState<"add" | "remove" | "approve" | null>(null);
+  const [lpBalance, setLpBalance] = useState("0.00");
+  const [lpBalanceRaw, setLpBalanceRaw] = useState<bigint>(BigInt(0));
+  const [lpSharePct, setLpSharePct] = useState("0");
+  const [lpPooledUsdc, setLpPooledUsdc] = useState("0.00");
+  const [lpPooledEurc, setLpPooledEurc] = useState("0.00");
+  const [poolReserveUsdc, setPoolReserveUsdc] = useState("0.00");
+  const [poolReserveEurc, setPoolReserveEurc] = useState("0.00");
+  const [lpPairAddress, setLpPairAddress] = useState("");
+  const [lpRemovePreviewUsdc, setLpRemovePreviewUsdc] = useState("");
+  const [lpRemovePreviewEurc, setLpRemovePreviewEurc] = useState("");
+  const [lpSlippageBps, setLpSlippageBps] = useState(100);
+  const [lpCustomSlippage, setLpCustomSlippage] = useState("");
+  const [showLpSlippage, setShowLpSlippage] = useState(false);
 
   const isArcTestnet = chainId === ARC_CHAIN_ID;
+  txBusyRef.current = isSending || isVaultLoading || isSwapping || isLpLoading;
 
   // --- PORTFOLIO CALCULATION LOGIC ---
   const usdcWalletValue = parseFloat(usdcBalance || "0");
@@ -151,6 +217,11 @@ export default function Home() {
       const to = params.get("to");
       const amount = params.get("amount");
       const token = params.get("token");
+
+      const tab = params.get("tab");
+      if (tab === "lp" || tab === "swap" || tab === "portfolio" || tab === "overview" || tab === "dailygm" || tab === "domains" || tab === "trustpass" || tab === "history" || tab === "learn") {
+        setSelectedTab(tab);
+      }
 
       if (to && amount) {
         setSendAddress(to);
@@ -228,57 +299,136 @@ export default function Home() {
     }
   };
 
-  const fetchBalances = useCallback(async (address: string, isSilentRefresh = false) => {
+  const fetchBalances = useCallback(async (address: string, options?: { force?: boolean }) => {
     if (!address) return;
-    try {
-      if (!isSilentRefresh) setBalancesLoading(true);
-      
-      let provider;
-      const eth = getEthereum();
-      if (eth) {
-        provider = new ethers.BrowserProvider(eth);
-      } else {
-        provider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
+    const normalized = address.toLowerCase();
+    const force = !!options?.force;
+    const now = Date.now();
+
+    if (
+      !force &&
+      balanceCacheRef.current.address === normalized &&
+      now - balanceCacheRef.current.at < BALANCE_CACHE_MS
+    ) {
+      return;
+    }
+
+    if (balanceInflightRef.current) {
+      await balanceInflightRef.current;
+      if (
+        !force &&
+        balanceCacheRef.current.address === normalized &&
+        Date.now() - balanceCacheRef.current.at < BALANCE_CACHE_MS
+      ) {
+        return;
       }
+    }
 
-      const eurcContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
-      const eurcVault = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, provider);
-      const usdcVault = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, provider);
+    const run = async () => {
+      const firstLoad = balanceCacheRef.current.address !== normalized;
+      if (firstLoad) setBalancesLoading(true);
 
-      const start = Date.now();
-      const [
-        nativeUsdcRaw, 
-        eurcRaw, 
-        eurcStakedRaw, 
-        usdcStakedRaw,
-        eurcYieldRaw,
-        usdcYieldRaw
-      ] = await Promise.all([
-        provider.getBalance(address),
-        eurcContract.balanceOf(address),
-        eurcVault.stakedBalance(address).catch(() => ethers.toBigInt(0)),
-        usdcVault.stakedBalance(address).catch(() => ethers.toBigInt(0)),
-        eurcVault.getPendingYield(address).catch(() => ethers.toBigInt(0)),
-        usdcVault.getPendingYield(address).catch(() => ethers.toBigInt(0))
-      ]);
-      
-      setNetworkLatency(Date.now() - start);
+      try {
+        const provider = getArcReadProvider();
+        const eurcContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, provider);
+        const wusdcContract = new ethers.Contract(WUSDC_ADDRESS, WUSDC_ABI, provider);
+        const eurcVault = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, provider);
+        const usdcVault = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, provider);
 
-      setUsdcBalance(Number(ethers.formatUnits(nativeUsdcRaw, 18)).toFixed(2));
-      setEurcBalance(Number(ethers.formatUnits(eurcRaw, 6)).toFixed(2));
-      
-      setEurcStakedBalance(Number(ethers.formatUnits(eurcStakedRaw, 6)).toFixed(2));
-      setUsdcStakedBalance(Number(ethers.formatUnits(usdcStakedRaw, 18)).toFixed(2));
+        const start = Date.now();
+        const [
+          nativeUsdcRes,
+          eurcRes,
+          wusdcRes,
+          pairRes,
+          eurcStakedRes,
+          usdcStakedRes,
+          eurcYieldRes,
+          usdcYieldRes,
+        ] = await Promise.allSettled([
+          provider.getBalance(address),
+          eurcContract.balanceOf(address),
+          wusdcContract.balanceOf(address),
+          fetchPairState(provider, EURC_ADDRESS, { force }),
+          eurcVault.stakedBalance(address),
+          usdcVault.stakedBalance(address),
+          eurcVault.getPendingYield(address),
+          usdcVault.getPendingYield(address),
+        ]);
 
-      // Calculate Total Lifetime PTS from both contracts
-      const eurcPts = Number(ethers.formatUnits(eurcYieldRaw, 6));
-      const usdcPts = Number(ethers.formatUnits(usdcYieldRaw, 18));
-      setLifetimePts(eurcPts + usdcPts);
+        setNetworkLatency(Date.now() - start);
 
-    } catch (error) {
-      console.error("Fetch Balance Error:", error);
+        const takeBig = (res: PromiseSettledResult<unknown>): bigint | null =>
+          res.status === "fulfilled" && typeof res.value === "bigint" ? res.value : null;
+
+        const nativeUsdcRaw = takeBig(nativeUsdcRes);
+        const eurcRaw = takeBig(eurcRes);
+        const wusdcRaw = takeBig(wusdcRes);
+        const eurcStakedRaw = takeBig(eurcStakedRes);
+        const usdcStakedRaw = takeBig(usdcStakedRes);
+        const eurcYieldRaw = takeBig(eurcYieldRes);
+        const usdcYieldRaw = takeBig(usdcYieldRes);
+        const pairState = pairRes.status === "fulfilled" ? pairRes.value : undefined;
+
+        if (nativeUsdcRaw !== null) {
+          setUsdcBalanceRaw(nativeUsdcRaw);
+          setUsdcBalance(formatDisplay(nativeUsdcRaw, WUSDC_DECIMALS, 2));
+        }
+        if (wusdcRaw !== null) setWusdcBalanceRaw(wusdcRaw);
+        if (eurcRaw !== null) {
+          setEurcBalanceRaw(eurcRaw);
+          setEurcBalance(formatDisplay(eurcRaw, EURC_DECIMALS, 2));
+        }
+        if (eurcStakedRaw !== null) setEurcStakedBalance(formatDisplay(eurcStakedRaw, EURC_DECIMALS, 2));
+        if (usdcStakedRaw !== null) setUsdcStakedBalance(formatDisplay(usdcStakedRaw, WUSDC_DECIMALS, 2));
+
+        if (pairState) {
+          setLpPairAddress(pairState.pairAddress);
+          setPoolReserveUsdc(formatPretty(pairState.reserveWusdc, WUSDC_DECIMALS, 4));
+          setPoolReserveEurc(formatPretty(pairState.reserveEurc, EURC_DECIMALS, 4));
+          const pair = new ethers.Contract(pairState.pairAddress, PAIR_ABI, provider);
+          try {
+            const lpRaw = (await pair.balanceOf(address)) as bigint;
+            setLpBalanceRaw(lpRaw);
+            setLpBalance(formatPretty(lpRaw, LP_DECIMALS, 8));
+            setLpSharePct(formatSharePercent(lpRaw, pairState.totalSupply));
+            const underlying = underlyingFromLp(lpRaw, pairState.totalSupply, pairState.reserveWusdc, pairState.reserveEurc);
+            setLpPooledUsdc(formatPretty(underlying.wusdc, WUSDC_DECIMALS, 6));
+            setLpPooledEurc(formatPretty(underlying.eurc, EURC_DECIMALS, 6));
+          } catch {
+            // keep last known LP position
+          }
+        }
+
+        if (eurcYieldRaw !== null || usdcYieldRaw !== null) {
+          const eurcPts = eurcYieldRaw !== null ? Number(ethers.formatUnits(eurcYieldRaw, 6)) : 0;
+          const usdcPts = usdcYieldRaw !== null ? Number(ethers.formatUnits(usdcYieldRaw, 18)) : 0;
+          if (eurcYieldRaw !== null && usdcYieldRaw !== null) {
+            setLifetimePts(eurcPts + usdcPts);
+          }
+        }
+
+        if (
+          nativeUsdcRes.status === "fulfilled" ||
+          eurcRes.status === "fulfilled" ||
+          pairRes.status === "fulfilled"
+        ) {
+          balanceCacheRef.current = { address: normalized, at: Date.now() };
+          setBalancesReady(true);
+        }
+      } catch (error) {
+        console.error("Fetch Balance Error:", error);
+      } finally {
+        setBalancesLoading(false);
+      }
+    };
+
+    const pending = run();
+    balanceInflightRef.current = pending;
+    try {
+      await pending;
     } finally {
-      if (!isSilentRefresh) setBalancesLoading(false);
+      if (balanceInflightRef.current === pending) balanceInflightRef.current = null;
     }
   }, []);
 
@@ -392,8 +542,20 @@ export default function Home() {
         setWallet("");
         setUsdcBalance("0.00");
         setEurcBalance("0.00");
+        setUsdcBalanceRaw(BigInt(0));
+        setEurcBalanceRaw(BigInt(0));
+        setWusdcBalanceRaw(BigInt(0));
         setUsdcStakedBalance("0.00");
         setEurcStakedBalance("0.00");
+        setLpBalance("0.00");
+        setLpBalanceRaw(BigInt(0));
+        setLpSharePct("0");
+        setLpPooledUsdc("0.00");
+        setLpPooledEurc("0.00");
+        setBalancesReady(false);
+        balanceCacheRef.current = { address: "", at: 0 };
+        lastSwapQuoteKeyRef.current = "";
+        lastLpQuoteKeyRef.current = "";
         setLifetimePts(0);
         setClaimedPts(0);
         setHasCheckedInToday(false);
@@ -428,11 +590,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!wallet || !isArcTestnet || isSending || showSendModal || isVaultLoading || isSwapping) return;
+    if (!wallet || !isArcTestnet) return;
     void fetchBalances(wallet);
-    const intervalId = setInterval(() => void fetchBalances(wallet, true), 8000);
+    const intervalId = setInterval(() => {
+      if (txBusyRef.current) return;
+      void fetchBalances(wallet);
+    }, BALANCE_CACHE_MS);
     return () => clearInterval(intervalId);
-  }, [wallet, isArcTestnet, fetchBalances, isSending, showSendModal, isVaultLoading, isSwapping]);
+  }, [wallet, isArcTestnet, fetchBalances]);
 
   const switchToArcTestnet = async () => {
     const ethereum = getEthereum();
@@ -500,8 +665,20 @@ export default function Home() {
     setChainId(null);
     setUsdcBalance("0.00");
     setEurcBalance("0.00");
+    setUsdcBalanceRaw(BigInt(0));
+    setEurcBalanceRaw(BigInt(0));
+    setWusdcBalanceRaw(BigInt(0));
     setUsdcStakedBalance("0.00");
     setEurcStakedBalance("0.00");
+    setLpBalance("0.00");
+    setLpBalanceRaw(BigInt(0));
+    setLpSharePct("0");
+    setLpPooledUsdc("0.00");
+    setLpPooledEurc("0.00");
+    setBalancesReady(false);
+    balanceCacheRef.current = { address: "", at: 0 };
+    lastSwapQuoteKeyRef.current = "";
+    lastLpQuoteKeyRef.current = "";
     setLifetimePts(0);
     setClaimedPts(0);
     setRegisteredDomain("");
@@ -652,6 +829,7 @@ export default function Home() {
       if (successCount > 0) {
         showMessage(isBatchMode ? `Batch Complete: ${successCount}/${resolvedAddresses.length} sent! 🎉` : `Successfully sent ${sendAmount} ${sendAsset}!`);
         setShowSendModal(false); setSendAddress(""); setSendAmount(""); setSendMemo(""); setIsBatchMode(false);
+        void fetchBalances(wallet, { force: true });
       } else {
         showMessage(isBatchMode ? `Batch Failed: 0/${resolvedAddresses.length} succeeded.` : `Transaction failed or rejected.`);
       }
@@ -725,7 +903,8 @@ export default function Home() {
       }
       
       setVaultInput("");
-      void fetchBalances(wallet);
+      invalidatePairCache();
+      void fetchBalances(wallet, { force: true });
 
     } catch (error: any) {
       console.error("Vault Error:", error);
@@ -736,52 +915,397 @@ export default function Home() {
     }
   };
 
-  // REAL SWAP LOGIC
+  const ensureTokenAllowance = async (
+    token: ethers.Contract,
+    owner: string,
+    spender: string,
+    amount: bigint,
+    label: string
+  ) => {
+    const current = (await token.allowance(owner, spender)) as bigint;
+    if (current >= amount) return;
+    showMessage(`Approving ${label}...`);
+    setSwapStatus("approving");
+    setLpAction("approve");
+    const approveTx = await token.approve(spender, amount);
+    showMessage("Waiting for approval confirmation...");
+    await approveTx.wait();
+  };
+
+  const applyCustomSlippage = (raw: string, setter: (bps: number) => void) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return;
+    setter(Math.max(1, Math.min(5000, Math.round(n * 100))));
+  };
+
+  const fillSwapMax = () => {
+    if (swapDirection === "USDCtoEURC") {
+      setSwapInput(formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS));
+    } else {
+      setSwapInput(formatExact(eurcBalanceRaw, EURC_DECIMALS));
+    }
+  };
+
+  const fillLpUsdcMax = () => {
+    setLpLastEdited("usdc");
+    setLpUsdcInput(formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS));
+  };
+
+  const fillLpEurcMax = () => {
+    setLpLastEdited("eurc");
+    setLpEurcInput(formatExact(eurcBalanceRaw, EURC_DECIMALS));
+  };
+
+  const fillLpRemoveMax = () => {
+    setLpRemoveIsMax(true);
+    setLpRemoveInput(formatExact(lpBalanceRaw, LP_DECIMALS));
+  };
+
+  const swapAmountIn = parseAmount(swapInput, swapDirection === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS);
+  const swapInsufficient = !!swapAmountIn && (
+    swapDirection === "USDCtoEURC"
+      ? swapAmountIn > usdcBalanceRaw
+      : swapAmountIn > eurcBalanceRaw
+  );
+  const swapMinOut = swapQuoteRaw > BigInt(0) ? applySlippage(swapQuoteRaw, slippageBps) : BigInt(0);
+  const swapUsdcLabel = formatPretty(usdcBalanceRaw, WUSDC_DECIMALS, 6);
+  const swapEurcLabel = formatPretty(eurcBalanceRaw, EURC_DECIMALS, 6);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadQuote = async () => {
+      if (!swapInput.trim()) {
+        lastSwapQuoteKeyRef.current = "";
+        setSwapQuote("");
+        setSwapQuoteRaw(BigInt(0));
+        setSwapQuoteError("");
+        return;
+      }
+
+      if (isAmountDraft(swapInput)) return;
+
+      const amountIn = parseAmount(swapInput, swapDirection === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS);
+      if (!amountIn || amountIn <= BigInt(0)) return;
+
+      const quoteKey = `${swapDirection}:${amountIn.toString()}`;
+      if (quoteKey === lastSwapQuoteKeyRef.current) return;
+
+      try {
+        const provider = getArcReadProvider();
+        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
+        const isUsdcIn = swapDirection === "USDCtoEURC";
+        const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
+        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
+        const out = amounts[amounts.length - 1];
+        if (!cancelled) {
+          lastSwapQuoteKeyRef.current = quoteKey;
+          setSwapQuoteRaw(out);
+          setSwapQuote(formatPretty(out, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
+          setSwapQuoteError("");
+        }
+      } catch {
+        if (!cancelled && lastSwapQuoteKeyRef.current === "") {
+          setSwapQuoteError("No quote. Check pool liquidity.");
+        }
+      }
+    };
+
+    const timer = window.setTimeout(() => { void loadQuote(); }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [swapInput, swapDirection]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncOtherSide = async () => {
+      if (lpMode !== "add") return;
+      const source = lpLastEdited === "usdc" ? lpUsdcInput : lpEurcInput;
+      if (!source.trim()) {
+        lastLpQuoteKeyRef.current = "";
+        if (lpLastEdited === "usdc") setLpEurcInput("");
+        else setLpUsdcInput("");
+        return;
+      }
+
+      if (isAmountDraft(source)) return;
+
+      const parsed = parseAmount(source, lpLastEdited === "usdc" ? WUSDC_DECIMALS : EURC_DECIMALS);
+      if (!parsed || parsed <= BigInt(0)) return;
+
+      const quoteKey = `${lpLastEdited}:${parsed.toString()}`;
+      if (quoteKey === lastLpQuoteKeyRef.current) return;
+
+      try {
+        const provider = getArcReadProvider();
+        const pairState = await fetchPairState(provider, EURC_ADDRESS);
+        if (!pairState || pairState.reserveWusdc === BigInt(0) || pairState.reserveEurc === BigInt(0)) return;
+        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
+        if (lpLastEdited === "usdc") {
+          const quotedEurc = (await router.quote(parsed, pairState.reserveWusdc, pairState.reserveEurc)) as bigint;
+          if (!cancelled) {
+            lastLpQuoteKeyRef.current = quoteKey;
+            setLpEurcInput(formatExact(quotedEurc, EURC_DECIMALS));
+          }
+        } else {
+          const quotedUsdc = (await router.quote(parsed, pairState.reserveEurc, pairState.reserveWusdc)) as bigint;
+          if (!cancelled) {
+            lastLpQuoteKeyRef.current = quoteKey;
+            setLpUsdcInput(formatExact(quotedUsdc, WUSDC_DECIMALS));
+          }
+        }
+      } catch {}
+    };
+
+    const timer = window.setTimeout(() => { void syncOtherSide(); }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [lpUsdcInput, lpEurcInput, lpLastEdited, lpMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const previewRemove = async () => {
+      const lpAmount = lpRemoveIsMax ? lpBalanceRaw : parseAmount(lpRemoveInput, LP_DECIMALS);
+      if (lpMode !== "remove" || !lpRemoveInput.trim()) {
+        setLpRemovePreviewUsdc("");
+        setLpRemovePreviewEurc("");
+        return;
+      }
+      if (!lpAmount || lpAmount <= BigInt(0)) return;
+      try {
+        const provider = getArcReadProvider();
+        const pairState = await fetchPairState(provider, EURC_ADDRESS);
+        if (!pairState) return;
+        const underlying = underlyingFromLp(lpAmount, pairState.totalSupply, pairState.reserveWusdc, pairState.reserveEurc);
+        if (!cancelled) {
+          setLpRemovePreviewUsdc(formatPretty(underlying.wusdc, WUSDC_DECIMALS, 8));
+          setLpRemovePreviewEurc(formatPretty(underlying.eurc, EURC_DECIMALS, 6));
+        }
+      } catch {
+        // keep last known remove preview
+      }
+    };
+
+    const timer = window.setTimeout(() => { void previewRemove(); }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [lpRemoveInput, lpMode, lpRemoveIsMax, lpBalanceRaw]);
+
   const handleSwap = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
-    if (!swapInput || parseFloat(swapInput) <= 0) return showMessage("Enter a valid amount");
+    const isUsdcIn = swapDirection === "USDCtoEURC";
+    const amountIn = parseAmount(swapInput, isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS);
+    if (!amountIn || amountIn <= BigInt(0)) return showMessage("Enter a valid amount");
     
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
     }
 
+    if (isUsdcIn && amountIn > usdcBalanceRaw) return showMessage("Insufficient USDC balance");
+    if (!isUsdcIn && amountIn > eurcBalanceRaw) return showMessage("Insufficient EURC balance");
+
     setIsSwapping(true);
+    setSwapStatus("confirm");
     try {
       const ethereum = getEthereum();
+      if (!ethereum) return showMessage("Wallet not found");
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
-      const swapContract = new ethers.Contract(SWAP_ADDRESS, SWAP_ABI, signer);
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
+      const deadline = swapDeadline();
+      const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
+      const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
+      const amountOutMin = applySlippage(amounts[1], slippageBps);
 
-      if (swapDirection === "USDCtoEURC") {
-        const amountWei = ethers.parseUnits(swapInput, 18);
+      if (isUsdcIn) {
         showMessage("Confirm Swap in wallet (USDC → EURC)...");
-        const tx = await swapContract.swapUSDCforEURC({ value: amountWei });
+        const tx = await router.swapExactETHForTokens(amountOutMin, path, wallet, deadline, { value: amountIn });
         showMessage("Broadcasting Swap...");
+        setSwapStatus("pending");
         const receipt = await tx.wait();
-        addHistoryRecord("Nexio Swap", `-${swapInput} USDC`, "Received EURC", "Completed", receipt?.hash || "");
+        addHistoryRecord("Nexio Swap", `-${formatPretty(amountIn, WUSDC_DECIMALS, 6)} USDC`, `Min ${formatPretty(amountOutMin, EURC_DECIMALS, 6)} EURC`, "Completed", receipt?.hash || "");
         showMessage("Swap Successful! 🔄");
       } else {
-        const amountWei = ethers.parseUnits(swapInput, 6);
-        showMessage("Approving EURC for Swap...");
-        const token = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-        await (await token.approve(SWAP_ADDRESS, amountWei)).wait();
-        
+        const token = new ethers.Contract(EURC_ADDRESS, TOKEN_ABI, signer);
+        await ensureTokenAllowance(token, wallet, ROUTER_ADDRESS, amountIn, "EURC");
         showMessage("Confirm Swap in wallet (EURC → USDC)...");
-        const tx = await swapContract.swapEURCforUSDC(amountWei);
+        setSwapStatus("confirm");
+        const tx = await router.swapExactTokensForETH(amountIn, amountOutMin, path, wallet, deadline);
         showMessage("Broadcasting Swap...");
+        setSwapStatus("pending");
         const receipt = await tx.wait();
-        addHistoryRecord("Nexio Swap", `-${swapInput} EURC`, "Received USDC", "Completed", receipt?.hash || "");
+        addHistoryRecord("Nexio Swap", `-${formatPretty(amountIn, EURC_DECIMALS, 6)} EURC`, `Min ${formatPretty(amountOutMin, WUSDC_DECIMALS, 6)} USDC`, "Completed", receipt?.hash || "");
         showMessage("Swap Successful! 🔄");
       }
       setSwapInput("");
-      void fetchBalances(wallet);
-    } catch (error: any) {
+      setSwapQuote("");
+      setSwapQuoteRaw(BigInt(0));
+      lastSwapQuoteKeyRef.current = "";
+      invalidatePairCache();
+      void fetchBalances(wallet, { force: true });
+    } catch (error: unknown) {
       console.error("Swap Error:", error);
-      showMessage(error?.reason || "Swap failed. Check Liquidity or Balance.");
+      showMessage(getTxErrorMessage(error));
     } finally {
       setIsSwapping(false);
+      setSwapStatus(null);
+    }
+  };
+
+  const handleAddLiquidity = async () => {
+    if (!wallet) return showMessage("Please connect wallet first");
+
+    if (!isArcTestnet) {
+      showMessage("Switching to Arc Testnet...");
+      const switched = await switchToArcTestnet();
+      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
+    }
+
+    setIsLpLoading(true);
+    setLpAction("add");
+    try {
+      const ethereum = getEthereum();
+      if (!ethereum) return showMessage("Wallet not found");
+      const readProvider = getArcReadProvider();
+      const pairState = await fetchPairState(readProvider, EURC_ADDRESS, { force: true });
+      if (!pairState || pairState.reserveWusdc === BigInt(0) || pairState.reserveEurc === BigInt(0)) {
+        return showMessage("Pool has no liquidity yet.");
+      }
+
+      const routerRead = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, readProvider);
+      let amountUsdc: bigint;
+      let amountEurc: bigint;
+
+      if (lpLastEdited === "usdc") {
+        const parsed = parseAmount(lpUsdcInput, WUSDC_DECIMALS);
+        if (!parsed || parsed <= BigInt(0)) return showMessage("Enter a valid USDC amount");
+        amountUsdc = parsed;
+        amountEurc = (await routerRead.quote(amountUsdc, pairState.reserveWusdc, pairState.reserveEurc)) as bigint;
+      } else {
+        const parsed = parseAmount(lpEurcInput, EURC_DECIMALS);
+        if (!parsed || parsed <= BigInt(0)) return showMessage("Enter a valid EURC amount");
+        amountEurc = parsed;
+        amountUsdc = (await routerRead.quote(amountEurc, pairState.reserveEurc, pairState.reserveWusdc)) as bigint;
+      }
+
+      if (amountUsdc > usdcBalanceRaw) return showMessage("Insufficient USDC balance");
+      if (amountEurc > eurcBalanceRaw) return showMessage("Insufficient EURC balance");
+
+      const provider = new ethers.BrowserProvider(ethereum);
+      const signer = await provider.getSigner();
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
+      const eurcToken = new ethers.Contract(EURC_ADDRESS, TOKEN_ABI, signer);
+      await ensureTokenAllowance(eurcToken, wallet, ROUTER_ADDRESS, amountEurc, "EURC");
+
+      const amountTokenMin = applySlippage(amountEurc, lpSlippageBps);
+      const amountEthMin = applySlippage(amountUsdc, lpSlippageBps);
+
+      showMessage("Confirm Add Liquidity in wallet...");
+      setLpAction("add");
+      const tx = await router.addLiquidityETH(
+        EURC_ADDRESS,
+        amountEurc,
+        amountTokenMin,
+        amountEthMin,
+        wallet,
+        swapDeadline(),
+        { value: amountUsdc }
+      );
+      showMessage("Broadcasting liquidity deposit...");
+      const receipt = await tx.wait();
+      addHistoryRecord(
+        "Add Liquidity",
+        `-${formatPretty(amountUsdc, WUSDC_DECIMALS, 6)} USDC / -${formatPretty(amountEurc, EURC_DECIMALS, 6)} EURC`,
+        `Min ${slippageLabel(lpSlippageBps)} slippage`,
+        "Completed",
+        receipt?.hash || ""
+      );
+      showMessage("Liquidity added! 💧");
+      setLpUsdcInput("");
+      setLpEurcInput("");
+      lastLpQuoteKeyRef.current = "";
+      invalidatePairCache();
+      void fetchBalances(wallet, { force: true });
+    } catch (error: unknown) {
+      console.error("Add Liquidity Error:", error);
+      showMessage(getTxErrorMessage(error));
+    } finally {
+      setIsLpLoading(false);
+      setLpAction(null);
+    }
+  };
+
+  const handleRemoveLiquidity = async () => {
+    if (!wallet) return showMessage("Please connect wallet first");
+    const liquidity = lpRemoveIsMax ? lpBalanceRaw : parseAmount(lpRemoveInput, LP_DECIMALS);
+    if (!liquidity || liquidity <= BigInt(0)) return showMessage("Enter an LP amount to remove");
+
+    if (!isArcTestnet) {
+      showMessage("Switching to Arc Testnet...");
+      const switched = await switchToArcTestnet();
+      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
+    }
+
+    if (liquidity > lpBalanceRaw) return showMessage("Insufficient LP token balance");
+
+    setIsLpLoading(true);
+    setLpAction("remove");
+    try {
+      const ethereum = getEthereum();
+      if (!ethereum) return showMessage("Wallet not found");
+      const provider = new ethers.BrowserProvider(ethereum);
+      const signer = await provider.getSigner();
+      const pairState = await fetchPairState(getArcReadProvider(), EURC_ADDRESS, { force: true });
+      if (!pairState) return showMessage("Liquidity pair not found");
+
+      const pair = new ethers.Contract(pairState.pairAddress, PAIR_ABI, signer);
+      await ensureTokenAllowance(pair, wallet, ROUTER_ADDRESS, liquidity, "LP tokens");
+
+      const underlying = underlyingFromLp(liquidity, pairState.totalSupply, pairState.reserveWusdc, pairState.reserveEurc);
+      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
+
+      showMessage("Confirm Remove Liquidity in wallet...");
+      setLpAction("remove");
+      const tx = await router.removeLiquidityETH(
+        EURC_ADDRESS,
+        liquidity,
+        applySlippage(underlying.eurc, lpSlippageBps),
+        applySlippage(underlying.wusdc, lpSlippageBps),
+        wallet,
+        swapDeadline()
+      );
+      showMessage("Broadcasting liquidity withdrawal...");
+      const receipt = await tx.wait();
+      addHistoryRecord(
+        "Remove Liquidity",
+        `+${formatPretty(applySlippage(underlying.wusdc, lpSlippageBps), WUSDC_DECIMALS, 6)} USDC / +${formatPretty(applySlippage(underlying.eurc, lpSlippageBps), EURC_DECIMALS, 6)} EURC`,
+        "USDC/EURC Pool",
+        "Completed",
+        receipt?.hash || ""
+      );
+      showMessage("Liquidity removed! 💸");
+      setLpRemoveInput("");
+      setLpRemoveIsMax(false);
+      setLpRemovePreviewUsdc("");
+      setLpRemovePreviewEurc("");
+      invalidatePairCache();
+      void fetchBalances(wallet, { force: true });
+    } catch (error: unknown) {
+      console.error("Remove Liquidity Error:", error);
+      showMessage(getTxErrorMessage(error));
+    } finally {
+      setIsLpLoading(false);
+      setLpAction(null);
     }
   };
 
@@ -863,7 +1387,7 @@ export default function Home() {
       showMessage(`GM! Daily check-in successful. You are on Day ${newStreak} 🔥`);
       addHistoryRecord("Daily GM Check-in", "", `Streak: Day ${newStreak} 🔥`, "Completed", receipt?.hash || "");
       
-      void fetchBalances(wallet); 
+      void fetchBalances(wallet, { force: true });
     } catch (error) {
       showMessage("GM Check-in rejected or failed");
     } finally {
@@ -1303,6 +1827,11 @@ export default function Home() {
             <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-indigo-500/20 text-indigo-400' : 'bg-indigo-100 text-indigo-700'}`}>NEW</span>
           </button>
 
+          <button onClick={() => handleTabSwitch("lp")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "lp" ? tc.sidebarActive : tc.sidebarInactive}`}>
+            <span>Liquidity</span>
+            <span className={`text-[10px] px-2 py-1 rounded-lg font-black tracking-widest ${theme === 'dark' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-cyan-100 text-cyan-700'}`}>LP</span>
+          </button>
+
           <button onClick={() => handleTabSwitch("dailygm")} className={`w-full rounded-2xl px-6 py-4 text-left flex justify-between items-center font-black tracking-wide transition-all border ${selectedTab === "dailygm" ? tc.sidebarActive : tc.sidebarInactive}`}>
             <span>Daily GM</span>
             <span className="text-xl pointer-events-none">🔥</span>
@@ -1380,13 +1909,13 @@ export default function Home() {
                   <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-8 relative overflow-hidden group transition-all duration-500 md:hover:-translate-y-1 ${tc.cardBg}`}>
                     <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110 pointer-events-none">💵</div>
                     <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-3 md:mb-4 ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>USDC Balance</div>
-                    <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{balancesLoading ? "..." : usdcBalance}</div>
+                    <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{!balancesReady && balancesLoading ? "..." : usdcBalance}</div>
                   </div>
 
                   <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-8 relative overflow-hidden group transition-all duration-500 md:hover:-translate-y-1 ${tc.cardBg}`}>
                     <div className="absolute -top-6 -right-6 md:-top-10 md:-right-10 p-6 md:p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-all duration-700 text-7xl md:text-9xl group-hover:scale-110 pointer-events-none">💶</div>
                     <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-3 md:mb-4 ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>EURC Balance</div>
-                    <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{balancesLoading ? "..." : eurcBalance}</div>
+                    <div className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter drop-shadow-sm">{!balancesReady && balancesLoading ? "..." : eurcBalance}</div>
                   </div>
                 </div>
 
@@ -1427,7 +1956,7 @@ export default function Home() {
                   <div className="flex flex-col items-center text-center">
                     <span className={`text-sm font-bold tracking-widest uppercase mb-4 ${tc.textMuted}`}>Total Net Worth</span>
                     <div className={`text-5xl sm:text-6xl font-black tracking-tighter mb-2 ${tc.textMain}`}>
-                      ${balancesLoading ? "..." : netWorthUsd.toFixed(2)}
+                      ${!balancesReady && balancesLoading ? "..." : netWorthUsd.toFixed(2)}
                     </div>
                     <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Based on live data (1 EURC ≈ $1.09)</span>
                   </div>
@@ -1614,39 +2143,249 @@ export default function Home() {
             )}
 
             {selectedTab === "swap" && (
-              <div className="w-full max-w-lg mx-auto space-y-6 animate-in fade-in zoom-in-95 font-mono mt-4 md:mt-10">
-                 <div className={`p-8 rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
-                    
-                    <div className="text-center mb-8 relative z-10">
-                       <div className="text-6xl mb-4 pointer-events-none">🔄</div>
-                       <h2 className={`text-3xl font-black tracking-tight ${tc.textMain}`}>Nexio Swap</h2>
-                       <p className={`text-xs mt-2 font-bold uppercase tracking-widest ${tc.textMuted}`}>1:1 Stablecoin Routing Pool</p>
+              <div className="w-full max-w-lg mx-auto animate-in fade-in zoom-in-95 mt-2 md:mt-6">
+                 <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
+                    <div className="flex items-start justify-between gap-3 mb-6 relative z-10">
+                       <div>
+                          <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Swap</h2>
+                          <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · 18-dec WUSDC</p>
+                       </div>
+                       <button
+                         onClick={() => setShowSlippage((v) => !v)}
+                         className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
+                       >
+                         Slip {slippageLabel(slippageBps)}
+                       </button>
                     </div>
 
-                    <div className="bg-black/20 p-1.5 rounded-2xl flex gap-2 mb-8 border border-white/5 relative z-10">
-                       <button onClick={() => setSwapDirection("USDCtoEURC")} className={`flex-1 py-3.5 rounded-xl font-black text-sm tracking-wide transition-all ${swapDirection === "USDCtoEURC" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>USDC → EURC</button>
-                       <button onClick={() => setSwapDirection("EURCtoUSDC")} className={`flex-1 py-3.5 rounded-xl font-black text-sm tracking-wide transition-all ${swapDirection === "EURCtoUSDC" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>EURC → USDC</button>
+                    {showSlippage && (
+                      <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                         <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
+                         <div className="flex flex-wrap gap-2">
+                            {SLIPPAGE_PRESETS.map((bps) => (
+                              <button key={bps} onClick={() => { setSlippageBps(bps); setCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${slippageBps === bps && !customSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
+                                {slippageLabel(bps)}
+                              </button>
+                            ))}
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              value={customSlippage}
+                              onChange={(e) => { setCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setSlippageBps); }}
+                              placeholder="Custom %"
+                              className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
+                            />
+                         </div>
+                      </div>
+                    )}
+
+                    <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
+                       <button onClick={() => setSwapDirection("USDCtoEURC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "USDCtoEURC" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>USDC → EURC</button>
+                       <button onClick={() => setSwapDirection("EURCtoUSDC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "EURCtoUSDC" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>EURC → USDC</button>
                     </div>
 
-                    <div className="space-y-4 relative z-10">
-                       <div className="relative">
-                         <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You Pay</div>
-                         <input type="number" value={swapInput} onChange={(e) => setSwapInput(e.target.value)} placeholder="0.00" className={`w-full rounded-2xl border px-5 py-5 font-black text-3xl ${tc.inputBg}`} />
-                         <button onClick={() => setSwapInput(swapDirection === "USDCtoEURC" ? usdcBalance : eurcBalance)} className={`absolute right-4 top-[42px] px-3 py-1.5 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}>Max</button>
-                         <div className={`text-[10px] font-bold mt-3 text-right tracking-widest ${tc.textMuted}`}>Balance: {swapDirection === "USDCtoEURC" ? usdcBalance : eurcBalance} {swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}</div>
+                    <div className="space-y-3 relative z-10">
+                       <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                         <div className="flex justify-between items-center mb-2">
+                           <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>You Pay</span>
+                           <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapDirection === "USDCtoEURC" ? swapUsdcLabel : swapEurcLabel}</span>
+                         </div>
+                         <div className="flex items-center gap-2">
+                           <input type="text" inputMode="decimal" value={swapInput} onChange={(e) => setSwapInput(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent border-none outline-none font-black text-2xl sm:text-3xl ${tc.textMain}`} />
+                           <div className="flex items-center gap-2 shrink-0">
+                             <span className={`text-sm font-black ${tc.textMain}`}>{swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}</span>
+                             <button onClick={fillSwapMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30">Max</button>
+                           </div>
+                         </div>
                        </div>
 
-                       <div className={`p-6 rounded-2xl border bg-black/40 border-white/5 flex flex-col justify-center`}>
-                         <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You Receive (Est.)</div>
-                         <div className={`text-3xl font-black ${tc.textMain}`}>{swapInput || "0.00"} <span className="text-xl text-gray-500">{swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}</span></div>
+                       <div className="flex justify-center -my-1 relative z-10">
+                         <div className={`w-9 h-9 rounded-full border flex items-center justify-center text-sm ${theme === 'dark' ? 'bg-[#0A1A3F] border-white/10' : 'bg-white border-slate-200'}`}>↓</div>
                        </div>
 
-                       <button onClick={handleSwap} disabled={isSwapping || !swapInput || parseFloat(swapInput) <= 0} className={`w-full py-5 mt-4 rounded-2xl font-black text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}>
-                         {isSwapping ? "Processing Swap..." : "Execute Swap"}
+                       <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                         <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${tc.textMuted}`}>You Receive</div>
+                         <div className="flex items-end justify-between gap-2">
+                           <div className={`font-black text-2xl sm:text-3xl break-all ${tc.textMain}`}>
+                             {swapQuote || "0.00"}
+                           </div>
+                           <span className="text-sm font-black text-gray-500 shrink-0">{swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}</span>
+                         </div>
+                         {swapQuoteRaw > BigInt(0) && (
+                           <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>
+                             Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinOut, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
+                           </div>
+                         )}
+                         {swapQuoteError && <div className="text-[10px] font-bold mt-2 text-red-400">{swapQuoteError}</div>}
+                       </div>
+
+                       <button
+                         onClick={!wallet ? connectWallet : handleSwap}
+                         disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient)}
+                         className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}
+                       >
+                         {!wallet
+                           ? "Connect Wallet"
+                           : isSwapping
+                             ? (swapStatus === "approving" ? "Approving EURC..." : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
+                             : swapInsufficient
+                               ? "Insufficient Balance"
+                               : "Swap"}
                        </button>
                     </div>
                     
-                    <div className={`text-[10px] mt-8 text-center font-bold tracking-widest ${tc.textMuted}`}>Contract: {SWAP_ADDRESS.slice(0,6)}...{SWAP_ADDRESS.slice(-4)}</div>
+                    <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>Router {ROUTER_ADDRESS.slice(0,6)}...{ROUTER_ADDRESS.slice(-4)}</div>
+                 </div>
+              </div>
+            )}
+
+            {selectedTab === "lp" && (
+              <div className="w-full max-w-lg mx-auto animate-in fade-in zoom-in-95 mt-2 md:mt-6">
+                 <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
+                    <div className="flex items-start justify-between gap-3 mb-5 relative z-10">
+                       <div>
+                          <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Liquidity</h2>
+                          <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC Pool</p>
+                       </div>
+                       <button
+                         onClick={() => setShowLpSlippage((v) => !v)}
+                         className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
+                       >
+                         Slip {slippageLabel(lpSlippageBps)}
+                       </button>
+                    </div>
+
+                    {showLpSlippage && (
+                      <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                         <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
+                         <div className="flex flex-wrap gap-2">
+                            {SLIPPAGE_PRESETS.map((bps) => (
+                              <button key={bps} onClick={() => { setLpSlippageBps(bps); setLpCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${lpSlippageBps === bps && !lpCustomSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
+                                {slippageLabel(bps)}
+                              </button>
+                            ))}
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              value={lpCustomSlippage}
+                              onChange={(e) => { setLpCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setLpSlippageBps); }}
+                              placeholder="Custom %"
+                              className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
+                            />
+                         </div>
+                      </div>
+                    )}
+
+                    <div className={`p-4 rounded-2xl border mb-5 relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                       <div className={`text-[10px] font-black uppercase tracking-widest mb-3 ${tc.textMuted}`}>Your Position</div>
+                       <div className="grid grid-cols-2 gap-3">
+                          <div>
+                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>LP Tokens</div>
+                             <div className={`text-base sm:text-lg font-black break-all ${tc.textMain}`}>{!balancesReady && balancesLoading ? "..." : lpBalance}</div>
+                          </div>
+                          <div className="text-right">
+                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pool Share</div>
+                             <div className={`text-base sm:text-lg font-black ${tc.textMain}`}>{lpSharePct}%</div>
+                          </div>
+                          <div>
+                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled USDC</div>
+                             <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledUsdc}</div>
+                          </div>
+                          <div className="text-right">
+                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled EURC</div>
+                             <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledEurc}</div>
+                          </div>
+                       </div>
+                       <div className={`flex justify-between mt-3 pt-3 border-t text-[10px] font-bold ${theme === 'dark' ? 'border-white/5' : 'border-slate-200'} ${tc.textMuted}`}>
+                          <span>Wallet WUSDC</span>
+                          <span className={tc.textMain}>{formatPretty(wusdcBalanceRaw, WUSDC_DECIMALS, 6)}</span>
+                       </div>
+                    </div>
+
+                    <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
+                       <button onClick={() => setLpMode("add")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "add" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Add</button>
+                       <button onClick={() => setLpMode("remove")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "remove" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Remove</button>
+                    </div>
+
+                    {lpMode === "add" ? (
+                      <div className="space-y-3 relative z-10">
+                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                           <div className="flex justify-between mb-2">
+                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC</span>
+                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapUsdcLabel}</span>
+                           </div>
+                           <div className="flex items-center gap-2">
+                             <input type="text" inputMode="decimal" value={lpUsdcInput} onChange={(e) => { setLpLastEdited("usdc"); setLpUsdcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                             <button onClick={fillLpUsdcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 shrink-0">Max</button>
+                           </div>
+                         </div>
+                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                           <div className="flex justify-between mb-2">
+                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>EURC</span>
+                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapEurcLabel}</span>
+                           </div>
+                           <div className="flex items-center gap-2">
+                             <input type="text" inputMode="decimal" value={lpEurcInput} onChange={(e) => { setLpLastEdited("eurc"); setLpEurcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                             <button onClick={fillLpEurcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
+                           </div>
+                         </div>
+                         <div className={`text-[10px] font-bold text-center ${tc.textMuted}`}>
+                           Pool {poolReserveUsdc} USDC / {poolReserveEurc} EURC · Min {slippageLabel(lpSlippageBps)}
+                         </div>
+                         <button
+                           onClick={!wallet ? connectWallet : handleAddLiquidity}
+                           disabled={!!wallet && (isLpLoading || !parseAmount(lpUsdcInput, WUSDC_DECIMALS) || !parseAmount(lpEurcInput, EURC_DECIMALS))}
+                           className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-cyan-500 hover:bg-cyan-400 text-white"
+                         >
+                           {!wallet
+                             ? "Connect Wallet"
+                             : isLpLoading
+                               ? (lpAction === "approve" ? "Approving EURC..." : "Adding Liquidity...")
+                               : ((parseAmount(lpUsdcInput, WUSDC_DECIMALS) ?? BigInt(0)) > usdcBalanceRaw || (parseAmount(lpEurcInput, EURC_DECIMALS) ?? BigInt(0)) > eurcBalanceRaw
+                                   ? "Insufficient Balance"
+                                   : "Add Liquidity")}
+                         </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3 relative z-10">
+                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                           <div className="flex justify-between mb-2">
+                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>LP to remove</span>
+                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {lpBalance}</span>
+                           </div>
+                           <div className="flex items-center gap-2">
+                             <input type="text" inputMode="decimal" value={lpRemoveInput} onChange={(e) => { setLpRemoveIsMax(false); setLpRemoveInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                             <button onClick={fillLpRemoveMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
+                           </div>
+                         </div>
+                         <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                           <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You receive (est.)</div>
+                           <div className={`text-base font-black ${tc.textMain}`}>{lpRemovePreviewUsdc || "0.00"} <span className="text-sm text-gray-500">USDC</span></div>
+                           <div className={`text-base font-black mt-1 ${tc.textMain}`}>{lpRemovePreviewEurc || "0.00"} <span className="text-sm text-gray-500">EURC</span></div>
+                           {lpRemovePreviewUsdc && (
+                             <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>Mins use {slippageLabel(lpSlippageBps)} slippage</div>
+                           )}
+                         </div>
+                         <button
+                           onClick={!wallet ? connectWallet : handleRemoveLiquidity}
+                           disabled={!!wallet && (isLpLoading || (!lpRemoveIsMax && !parseAmount(lpRemoveInput, LP_DECIMALS)))}
+                           className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-emerald-500 hover:bg-emerald-400 text-white"
+                         >
+                           {!wallet
+                             ? "Connect Wallet"
+                             : isLpLoading
+                               ? (lpAction === "approve" ? "Approving LP..." : "Removing Liquidity...")
+                               : ((!lpRemoveIsMax && (parseAmount(lpRemoveInput, LP_DECIMALS) ?? BigInt(0)) > lpBalanceRaw)
+                                   ? "Insufficient LP Balance"
+                                   : "Remove Liquidity")}
+                         </button>
+                      </div>
+                    )}
+
+                    <div className={`text-[10px] mt-5 text-center font-bold tracking-widest space-y-1 ${tc.textMuted}`}>
+                       <div>Router {ROUTER_ADDRESS.slice(0,6)}...{ROUTER_ADDRESS.slice(-4)}</div>
+                       <div>Factory {FACTORY_ADDRESS.slice(0,6)}...{FACTORY_ADDRESS.slice(-4)}</div>
+                    </div>
                  </div>
               </div>
             )}
