@@ -1,11 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { ethers } from "ethers";
+import type { IDetectedBarcode } from "@yudiel/react-qr-scanner";
 import {
   WUSDC_ADDRESS,
   FACTORY_ADDRESS,
   ROUTER_ADDRESS,
+  DAILY_GM_ADDRESS,
+  DAILY_GM_ABI,
   WUSDC_DECIMALS,
   EURC_DECIMALS,
   LP_DECIMALS,
@@ -31,6 +35,11 @@ import {
   swapDeadline,
   underlyingFromLp,
 } from "@/lib/contracts";
+
+const QrScanner = dynamic(
+  () => import("@yudiel/react-qr-scanner").then((mod) => mod.Scanner),
+  { ssr: false }
+);
 
 const ARC_CHAIN_ID = 5042002;
 const ARC_CHAIN_ID_HEX = "0x4cef52";
@@ -108,6 +117,7 @@ export default function Home() {
   const lastLpQuoteKeyRef = useRef("");
 
   const [showSendModal, setShowSendModal] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [isBatchMode, setIsBatchMode] = useState(false);
@@ -123,6 +133,7 @@ export default function Home() {
   const [paymentLink, setPaymentLink] = useState("");
 
   const [streak, setStreak] = useState(0);
+  const [lastCheckInTime, setLastCheckInTime] = useState(0);
   const [hasCheckedInToday, setHasCheckedInToday] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [timeLeft, setTimeLeft] = useState("");
@@ -142,6 +153,7 @@ export default function Home() {
   const [vaultAsset, setVaultAsset] = useState<"USDC" | "EURC">("USDC");
   const [usdcStakedBalance, setUsdcStakedBalance] = useState("0.00");
   const [eurcStakedBalance, setEurcStakedBalance] = useState("0.00");
+  const [liveEurcUsdRate, setLiveEurcUsdRate] = useState<number>(1.09);
   
   const [lifetimePts, setLifetimePts] = useState(0);
   const [claimedPts, setClaimedPts] = useState(0);
@@ -197,7 +209,7 @@ export default function Home() {
   
   const totalUsdcValue = usdcWalletValue + uStakedValue;
   const totalEurcValue = eurcWalletValue + eStakedValue; 
-  const eurcUsdRate = 1.09; 
+  const eurcUsdRate = liveEurcUsdRate; 
   const netWorthUsd = totalUsdcValue + (totalEurcValue * eurcUsdRate);
   
   const usdcPercent = netWorthUsd > 0 ? ((totalUsdcValue / netWorthUsd) * 100).toFixed(0) : "0";
@@ -334,6 +346,17 @@ export default function Home() {
         const wusdcContract = new ethers.Contract(WUSDC_ADDRESS, WUSDC_ABI, provider);
         const eurcVault = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, provider);
         const usdcVault = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, provider);
+        const dailyGmContract = new ethers.Contract(DAILY_GM_ADDRESS, DAILY_GM_ABI, provider);
+
+        try {
+          const routerRate = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
+          const oneEurc = ethers.parseUnits("1", 6);
+          const amounts = await routerRate.getAmountsOut(oneEurc, [EURC_ADDRESS, WUSDC_ADDRESS]);
+          const fetchedRate = parseFloat(ethers.formatUnits(amounts[1], 18));
+          if (fetchedRate > 0) setLiveEurcUsdRate(fetchedRate);
+        } catch (rateError) {
+          console.error("Failed to fetch live rate", rateError);
+        }
 
         const start = Date.now();
         const [
@@ -345,6 +368,8 @@ export default function Home() {
           usdcStakedRes,
           eurcYieldRes,
           usdcYieldRes,
+          lastCheckInRes,
+          streakRes,
         ] = await Promise.allSettled([
           provider.getBalance(address),
           eurcContract.balanceOf(address),
@@ -354,6 +379,8 @@ export default function Home() {
           usdcVault.stakedBalance(address),
           eurcVault.getPendingYield(address),
           usdcVault.getPendingYield(address),
+          dailyGmContract.lastCheckIn(address),
+          dailyGmContract.streak(address),
         ]);
 
         setNetworkLatency(Date.now() - start);
@@ -408,6 +435,15 @@ export default function Home() {
           }
         }
 
+        const lastCheckInRaw = takeBig(lastCheckInRes);
+        const streakRaw = takeBig(streakRes);
+        if (lastCheckInRaw !== null) {
+          const lastTs = Number(lastCheckInRaw);
+          setLastCheckInTime(lastTs);
+          setHasCheckedInToday((Date.now() / 1000) < (lastTs + 86400));
+        }
+        if (streakRaw !== null) setStreak(Number(streakRaw));
+
         if (
           nativeUsdcRes.status === "fulfilled" ||
           eurcRes.status === "fulfilled" ||
@@ -450,12 +486,6 @@ export default function Home() {
   useEffect(() => {
     if (!wallet) return;
 
-    const oldStreak = localStorage.getItem(`trustbank_streak_${wallet}`);
-    if (oldStreak && !localStorage.getItem(`nexio_streak_${wallet}`)) {
-      localStorage.setItem(`nexio_streak_${wallet}`, oldStreak);
-      localStorage.setItem(`nexio_last_gm_${wallet}`, localStorage.getItem(`trustbank_last_gm_${wallet}`) || "");
-    }
-
     const oldDomain = localStorage.getItem(`trustbank_domain_name_${wallet}`);
     if (oldDomain && !localStorage.getItem(`nexio_domain_name_${wallet}`)) {
       const migratedDomain = oldDomain.replace(".trust", ".nex");
@@ -467,31 +497,6 @@ export default function Home() {
       localStorage.setItem(`nexio_history_${wallet}`, oldHistory);
     }
 
-    const storedStreak = localStorage.getItem(`nexio_streak_${wallet}`);
-    const storedDate = localStorage.getItem(`nexio_last_gm_${wallet}`);
-    const today = new Date().toLocaleDateString();
-
-    if (storedDate) {
-      const lastDate = new Date(storedDate);
-      const currentDate = new Date(today);
-      const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      if (storedDate === today) {
-        setHasCheckedInToday(true);
-        setStreak(Number(storedStreak) || 1);
-      } else if (diffDays === 1) {
-        setHasCheckedInToday(false);
-        setStreak(Number(storedStreak) || 0);
-      } else {
-        setHasCheckedInToday(false);
-        setStreak(0);
-      }
-    } else {
-      setHasCheckedInToday(false);
-      setStreak(0);
-    }
-    
     const myDomain = localStorage.getItem(`nexio_domain_name_${wallet}`);
     if (myDomain) setRegisteredDomain(myDomain);
 
@@ -509,9 +514,7 @@ export default function Home() {
       return;
     }
     const timer = setInterval(() => {
-      const now = new Date();
-      const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-      const diff = tomorrow.getTime() - now.getTime();
+      const diff = (lastCheckInTime + 86400) * 1000 - Date.now();
 
       if (diff <= 0) {
         setHasCheckedInToday(false);
@@ -527,7 +530,7 @@ export default function Home() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [hasCheckedInToday]);
+  }, [hasCheckedInToday, lastCheckInTime]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -560,6 +563,7 @@ export default function Home() {
         setClaimedPts(0);
         setHasCheckedInToday(false);
         setStreak(0);
+        setLastCheckInTime(0);
         setRegisteredDomain("");
         setNetworkLatency(0);
         setIsBatchMode(false);
@@ -681,6 +685,9 @@ export default function Home() {
     lastLpQuoteKeyRef.current = "";
     setLifetimePts(0);
     setClaimedPts(0);
+    setHasCheckedInToday(false);
+    setStreak(0);
+    setLastCheckInTime(0);
     setRegisteredDomain("");
     setNetworkLatency(0);
     setIsBatchMode(false);
@@ -709,6 +716,7 @@ export default function Home() {
       const switched = await switchToArcTestnet();
       if (!switched) return showMessage("Network switch failed. Please switch manually.");
     }
+    setIsScanning(false);
     setShowSendModal(true);
   };
 
@@ -733,6 +741,36 @@ export default function Home() {
     if (!paymentLink) return;
     await navigator.clipboard.writeText(paymentLink);
     showMessage("Link copied to clipboard! 📋");
+  };
+
+  const applyScannedRecipient = (raw: string) => {
+    const text = raw.trim();
+    if (!text) return;
+
+    let recipient = text;
+    if (text.toLowerCase().startsWith("ethereum:")) {
+      recipient = text.slice(9).split(/[?@]/)[0];
+    } else {
+      try {
+        const url = new URL(text);
+        const to = url.searchParams.get("to");
+        if (to) recipient = to;
+      } catch {
+        // raw address or .nex domain
+      }
+    }
+
+    recipient = recipient.trim();
+    if (!recipient) return;
+
+    if (isBatchMode && sendAddress.trim()) {
+      const parts = sendAddress.split(",").map((part) => part.trim()).filter(Boolean);
+      const exists = parts.some((part) => part.toLowerCase() === recipient.toLowerCase());
+      if (!exists) setSendAddress(`${parts.join(", ")}, ${recipient}`);
+    } else {
+      setSendAddress(recipient);
+    }
+    setIsScanning(false);
   };
 
   const handleSendClick = () => {
@@ -1312,7 +1350,7 @@ export default function Home() {
   // REAL TRANSACTION PTS CLAIM LOGIC
   const handleClaimPts = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
-    if (unclaimedPts <= 0) return showMessage("No pending PTS to claim");
+    if (unclaimedPts <= 0) return showMessage("No pending NLP to claim");
     
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
@@ -1328,9 +1366,9 @@ export default function Home() {
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
 
-      showMessage("Confirm PTS Claim in your wallet...");
+      showMessage("Confirm NLP Claim in your wallet...");
       
-      const memoHex = ethers.hexlify(ethers.toUtf8Bytes(`Nexio PTS Claim: ${unclaimedPts.toFixed(2)}`));
+      const memoHex = ethers.hexlify(ethers.toUtf8Bytes(`Nexio NLP Claim: ${unclaimedPts.toFixed(2)}`));
       const tx = await signer.sendTransaction({
         to: wallet,
         value: 0,
@@ -1343,8 +1381,8 @@ export default function Home() {
       setClaimedPts(lifetimePts);
       localStorage.setItem(`nexio_claimed_pts_${wallet}`, lifetimePts.toString());
       
-      addHistoryRecord("Claimed Nexio PTS", `+${unclaimedPts.toFixed(2)} PTS`, "Loyalty Engagement Record", "Completed", receipt?.hash || "");
-      showMessage("PTS Claimed Successfully! 🎯");
+      addHistoryRecord("Claimed Nexio NLP", `+${unclaimedPts.toFixed(2)} NLP`, "Loyalty Engagement Record", "Completed", receipt?.hash || "");
+      showMessage("NLP Claimed Successfully! 🎯");
       triggerConfetti();
 
     } catch (error: any) {
@@ -1372,21 +1410,15 @@ export default function Home() {
       const signer = await provider.getSigner();
 
       showMessage("Confirm Daily GM Check-in...");
-      const tx = await signer.sendTransaction({ to: wallet, value: 0 });
+      const contract = new ethers.Contract(DAILY_GM_ADDRESS, DAILY_GM_ABI, signer);
+      const tx = await contract.checkIn();
 
       showMessage("Broadcasting GM Transaction to Arc Network...");
       const receipt = await tx.wait();
-      
-      const newStreak = streak + 1;
-      const today = new Date().toLocaleDateString();
-      setStreak(newStreak);
-      setHasCheckedInToday(true);
-      localStorage.setItem(`nexio_streak_${wallet}`, newStreak.toString());
-      localStorage.setItem(`nexio_last_gm_${wallet}`, today);
 
-      showMessage(`GM! Daily check-in successful. You are on Day ${newStreak} 🔥`);
-      addHistoryRecord("Daily GM Check-in", "", `Streak: Day ${newStreak} 🔥`, "Completed", receipt?.hash || "");
-      
+      showMessage(`GM! Daily check-in successful. You are on Day ${streak + 1} 🔥`);
+      addHistoryRecord("Daily GM Check-in", "", `Streak: Day ${streak + 1} 🔥`, "Completed", receipt?.hash || "");
+
       void fetchBalances(wallet, { force: true });
     } catch (error) {
       showMessage("GM Check-in rejected or failed");
@@ -1748,7 +1780,7 @@ export default function Home() {
           <div className={`w-full max-w-md rounded-[2rem] border p-6 sm:p-8 backdrop-blur-2xl transition-colors duration-300 ${tc.modalBg}`}>
             <div className="flex items-center justify-between mb-6">
               <h3 className={`text-2xl font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Send Asset</h3>
-              <button onClick={() => setShowSendModal(false)} className="text-gray-400 hover:text-cyan-500 transition rounded-full p-2.5">✕</button>
+              <button onClick={() => { setIsScanning(false); setShowSendModal(false); }} className="text-gray-400 hover:text-cyan-500 transition rounded-full p-2.5">✕</button>
             </div>
 
             <div className="flex items-center justify-between bg-black/20 p-3 rounded-2xl mb-6 border border-white/5">
@@ -1763,10 +1795,42 @@ export default function Home() {
 
             <div className="space-y-5">
               <div>
-                <label className={`text-xs font-bold mb-2 flex justify-between uppercase tracking-widest ${tc.historyText}`}>
-                  <span>Recipient {isBatchMode ? "Addresses or names" : "Address or name"}</span>
+                <label className={`text-xs font-bold mb-2 flex justify-between items-center uppercase tracking-widest ${tc.historyText}`}>
+                  <span className="flex items-center gap-2">
+                    Recipient {isBatchMode ? "Addresses or names" : "Address or name"}
+                    <button
+                      type="button"
+                      onClick={() => setIsScanning((prev) => !prev)}
+                      className={`normal-case tracking-wide text-[10px] font-black px-2.5 py-1 rounded-lg border transition-all ${
+                        isScanning
+                          ? (theme === "dark" ? "border-cyan-400 bg-cyan-500/20 text-cyan-300" : "border-cyan-500 bg-cyan-100 text-cyan-700")
+                          : (theme === "dark" ? "border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10" : "border-cyan-300 text-cyan-600 hover:bg-cyan-50")
+                      }`}
+                    >
+                      {isScanning ? "Close" : "Scan QR"}
+                    </button>
+                  </span>
                   {isBatchMode && <span className="text-[9px] text-orange-400">Separate with comma (,)</span>}
                 </label>
+                {isScanning && (
+                  <div className="mb-3 overflow-hidden rounded-2xl border border-cyan-500/30 bg-black">
+                    <QrScanner
+                      onScan={(detected: IDetectedBarcode[]) => {
+                        const text = detected?.[0]?.rawValue;
+                        if (text) applyScannedRecipient(text);
+                      }}
+                      onError={(error) => {
+                        if (error?.kind === "permission-denied") showMessage("Camera permission denied");
+                        else if (error?.kind === "no-camera") showMessage("No camera found");
+                        else if (error?.message) showMessage(error.message);
+                      }}
+                      constraints={{ facingMode: "environment" }}
+                      formats={["qr_code"]}
+                      sound={false}
+                      styles={{ container: { width: "100%" } }}
+                    />
+                  </div>
+                )}
                 {isBatchMode ? (
                   <textarea value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="0x1..., jubayir.nex, 0x3..." className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm resize-none h-24 ${tc.inputBg}`} />
                 ) : (
@@ -1958,7 +2022,7 @@ export default function Home() {
                     <div className={`text-5xl sm:text-6xl font-black tracking-tighter mb-2 ${tc.textMain}`}>
                       ${!balancesReady && balancesLoading ? "..." : netWorthUsd.toFixed(2)}
                     </div>
-                    <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Based on live data (1 EURC ≈ $1.09)</span>
+                    <span className={`text-xs font-bold tracking-widest uppercase mb-6 ${tc.textMuted}`}>Based on live data (1 EURC ≈ ${liveEurcUsdRate.toFixed(4)})</span>
                   </div>
                 </div>
 
@@ -2022,20 +2086,20 @@ export default function Home() {
                   <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🎯</div>
                   
                   <div className="mb-6 max-w-[80%] relative z-10">
-                     <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (PTS)</h3>
+                     <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (NLP)</h3>
                      <p className={`text-xs md:text-sm font-medium leading-relaxed ${tc.textMuted}`}>
-                        Track your ecosystem engagement. PTS reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
+                        Track your ecosystem engagement. NLP reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
                      </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-black/20 p-5 rounded-2xl border border-white/5 relative z-10">
                      <div className="flex flex-col gap-4 w-full">
                         <div className="flex justify-between items-center">
-                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime PTS</span>
+                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime NLP</span>
                            <span className={`text-xl font-black ${tc.textMain}`}>{lifetimePts.toFixed(2)}</span>
                         </div>
                         <div className="flex justify-between items-center border-t border-white/10 pt-4">
-                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Unclaimed PTS</span>
+                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Unclaimed NLP</span>
                            <span className={`text-2xl font-black text-indigo-400 animate-pulse`}>+ {unclaimedPts.toFixed(2)}</span>
                         </div>
                      </div>
@@ -2045,7 +2109,7 @@ export default function Home() {
                         disabled={isVaultLoading || unclaimedPts <= 0}
                         className={`w-full sm:w-auto px-6 py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] disabled:opacity-50 disabled:shadow-none active:scale-95 ${theme === 'dark' ? 'bg-indigo-500 hover:bg-indigo-400 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
                      >
-                        {isVaultLoading && vaultAction === 'claim' ? 'Claiming...' : 'Claim PTS'}
+                        {isVaultLoading && vaultAction === 'claim' ? 'Claiming...' : 'Claim NLP'}
                      </button>
                   </div>
                 </div>
@@ -2633,6 +2697,21 @@ export default function Home() {
                       <div className="text-2xl mb-2 pointer-events-none">🪪</div>
                       <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Pass & Daily GM</h4>
                       <p className={`text-xs md:text-sm ${tc.textMuted}`}>Build an on-chain streak and unlock your verifiable, holographic Web3 Identity Card.</p>
+                    </div>
+                    <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+                      <div className="text-2xl mb-2 pointer-events-none">🔄</div>
+                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Nexio Swap</h4>
+                      <p className={`text-xs md:text-sm ${tc.textMuted}`}>Exchange USDC and EURC seamlessly with real on-chain AMM routing and live market rates.</p>
+                    </div>
+                    <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+                      <div className="text-2xl mb-2 pointer-events-none">💧</div>
+                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>Liquidity Pools</h4>
+                      <p className={`text-xs md:text-sm ${tc.textMuted}`}>Provide liquidity to the USDC/EURC pool, earn protocol fees, and manage your LP tokens.</p>
+                    </div>
+                    <div className={`p-5 md:p-6 rounded-2xl border ${theme === 'dark' ? 'bg-white/5 border-white/10' : 'bg-white border-slate-200'}`}>
+                      <div className="text-2xl mb-2 pointer-events-none">🌱</div>
+                      <h4 className={`text-lg font-black mb-2 ${tc.textMain}`}>DeFi Vault</h4>
+                      <p className={`text-xs md:text-sm ${tc.textMuted}`}>Stake your native assets into Nexio's smart contracts to earn Nexio Loyalty Points (NLP).</p>
                     </div>
                   </div>
                 </div>

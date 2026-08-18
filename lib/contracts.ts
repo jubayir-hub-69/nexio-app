@@ -1,5 +1,12 @@
 import { ethers } from "ethers";
 
+export const DAILY_GM_ADDRESS = "0x38e1458db96272B23c270AC2428f849D8b7611AD";
+export const DAILY_GM_ABI = [
+  "function checkIn() external",
+  "function lastCheckIn(address) external view returns (uint256)",
+  "function streak(address) external view returns (uint256)"
+];
+
 export const WUSDC_ADDRESS = "0xDe5DB9049a8dd344dC1B7Bbb098f9da60930A6dA";
 export const FACTORY_ADDRESS = "0x7cC023C7184810B84657D55c1943eBfF8603B72B";
 export const ROUTER_ADDRESS = "0xB92428D440c335546b69138F7fAF689F5ba8D436";
