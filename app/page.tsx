@@ -94,6 +94,18 @@ type ActivityItem = {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const sanitizeDomainName = (raw: string) =>
+  raw.trim().toLowerCase().replace(/\.nex$/i, "").replace(/[^a-z0-9-]/g, "");
+
+function safeParseJson<T>(raw: string | null, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 export default function Home() {
   const [wallet, setWallet] = useState("");
   const [message, setMessage] = useState("");
@@ -115,6 +127,11 @@ export default function Home() {
   const txBusyRef = useRef(false);
   const lastSwapQuoteKeyRef = useRef("");
   const lastLpQuoteKeyRef = useRef("");
+  const walletRef = useRef("");
+  const messageTimerRef = useRef<number | null>(null);
+  const sendLockRef = useRef(false);
+  const yieldPartsRef = useRef({ eurc: 0, usdc: 0 });
+  const [passVerified, setPassVerified] = useState(false);
 
   const [showSendModal, setShowSendModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -157,7 +174,9 @@ export default function Home() {
   
   const [lifetimePts, setLifetimePts] = useState(0);
   const [claimedPts, setClaimedPts] = useState(0);
-  const unclaimedPts = Math.max(0, lifetimePts - claimedPts);
+  const unclaimedPts = claimedPts > lifetimePts
+    ? lifetimePts
+    : Math.max(0, lifetimePts - claimedPts);
 
   const [vaultInput, setVaultInput] = useState("");
   const [isVaultLoading, setIsVaultLoading] = useState(false);
@@ -200,15 +219,19 @@ export default function Home() {
 
   const isArcTestnet = chainId === ARC_CHAIN_ID;
   txBusyRef.current = isSending || isVaultLoading || isSwapping || isLpLoading;
+  walletRef.current = wallet;
 
   // --- PORTFOLIO CALCULATION LOGIC ---
   const usdcWalletValue = parseFloat(usdcBalance || "0");
   const eurcWalletValue = parseFloat(eurcBalance || "0");
   const uStakedValue = parseFloat(usdcStakedBalance || "0");
   const eStakedValue = parseFloat(eurcStakedBalance || "0");
+  const lpUsdcValue = parseFloat(lpPooledUsdc || "0");
+  const lpEurcValue = parseFloat(lpPooledEurc || "0");
+  const wusdcWalletValue = parseFloat(formatPretty(wusdcBalanceRaw, WUSDC_DECIMALS, 6) || "0");
   
-  const totalUsdcValue = usdcWalletValue + uStakedValue;
-  const totalEurcValue = eurcWalletValue + eStakedValue; 
+  const totalUsdcValue = usdcWalletValue + uStakedValue + lpUsdcValue + wusdcWalletValue;
+  const totalEurcValue = eurcWalletValue + eStakedValue + lpEurcValue; 
   const eurcUsdRate = liveEurcUsdRate; 
   const netWorthUsd = totalUsdcValue + (totalEurcValue * eurcUsdRate);
   
@@ -279,7 +302,8 @@ export default function Home() {
 
   const showMessage = (text: string) => {
     setMessage(text);
-    window.setTimeout(() => setMessage(""), 4000);
+    if (messageTimerRef.current) window.clearTimeout(messageTimerRef.current);
+    messageTimerRef.current = window.setTimeout(() => setMessage(""), 4000);
   };
 
   const getEthereum = () => {
@@ -383,6 +407,8 @@ export default function Home() {
           dailyGmContract.streak(address),
         ]);
 
+        if (!walletRef.current || address.toLowerCase() !== walletRef.current.toLowerCase()) return;
+
         setNetworkLatency(Date.now() - start);
 
         const takeBig = (res: PromiseSettledResult<unknown>): bigint | null =>
@@ -416,6 +442,7 @@ export default function Home() {
           const pair = new ethers.Contract(pairState.pairAddress, PAIR_ABI, provider);
           try {
             const lpRaw = (await pair.balanceOf(address)) as bigint;
+            if (!walletRef.current || address.toLowerCase() !== walletRef.current.toLowerCase()) return;
             setLpBalanceRaw(lpRaw);
             setLpBalance(formatPretty(lpRaw, LP_DECIMALS, 8));
             setLpSharePct(formatSharePercent(lpRaw, pairState.totalSupply));
@@ -427,12 +454,16 @@ export default function Home() {
           }
         }
 
+        if (!walletRef.current || address.toLowerCase() !== walletRef.current.toLowerCase()) return;
+
+        if (eurcYieldRaw !== null) {
+          yieldPartsRef.current.eurc = Number(ethers.formatUnits(eurcYieldRaw, 6));
+        }
+        if (usdcYieldRaw !== null) {
+          yieldPartsRef.current.usdc = Number(ethers.formatUnits(usdcYieldRaw, 18));
+        }
         if (eurcYieldRaw !== null || usdcYieldRaw !== null) {
-          const eurcPts = eurcYieldRaw !== null ? Number(ethers.formatUnits(eurcYieldRaw, 6)) : 0;
-          const usdcPts = usdcYieldRaw !== null ? Number(ethers.formatUnits(usdcYieldRaw, 18)) : 0;
-          if (eurcYieldRaw !== null && usdcYieldRaw !== null) {
-            setLifetimePts(eurcPts + usdcPts);
-          }
+          setLifetimePts(yieldPartsRef.current.eurc + yieldPartsRef.current.usdc);
         }
 
         const lastCheckInRaw = takeBig(lastCheckInRes);
@@ -474,9 +505,9 @@ export default function Home() {
     try {
       const provider = new ethers.BrowserProvider(ethereum);
       const accounts = await provider.send("eth_accounts", []);
-      if (accounts?.length) {
+      if (accounts?.length && localStorage.getItem("nexio_manual_disconnect") !== "1") {
         setWallet(accounts[0]);
-      } else {
+      } else if (!accounts?.length) {
         setWallet("");
       }
       await syncNetwork();
@@ -497,14 +528,16 @@ export default function Home() {
       localStorage.setItem(`nexio_history_${wallet}`, oldHistory);
     }
 
-    const myDomain = localStorage.getItem(`nexio_domain_name_${wallet}`);
-    if (myDomain) setRegisteredDomain(myDomain);
+    const myDomain = localStorage.getItem(`nexio_domain_name_${wallet}`) || "";
+    setRegisteredDomain(myDomain);
+    setPassVerified(false);
 
     const savedHistory = localStorage.getItem(`nexio_history_${wallet}`);
-    if (savedHistory) setTxHistory(JSON.parse(savedHistory));
+    setTxHistory(safeParseJson<ActivityItem[]>(savedHistory, []));
 
     const savedClaimedPts = localStorage.getItem(`nexio_claimed_pts_${wallet}`);
-    if (savedClaimedPts) setClaimedPts(Number(savedClaimedPts));
+    const parsedClaimed = savedClaimedPts ? Number(savedClaimedPts) : 0;
+    setClaimedPts(Number.isFinite(parsedClaimed) ? parsedClaimed : 0);
 
   }, [wallet]);
 
@@ -532,6 +565,66 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [hasCheckedInToday, lastCheckInTime]);
 
+  const resetSessionState = (options?: { keepWallet?: boolean }) => {
+    setUsdcBalance("0.00");
+    setEurcBalance("0.00");
+    setUsdcBalanceRaw(BigInt(0));
+    setEurcBalanceRaw(BigInt(0));
+    setWusdcBalanceRaw(BigInt(0));
+    setUsdcStakedBalance("0.00");
+    setEurcStakedBalance("0.00");
+    setLpBalance("0.00");
+    setLpBalanceRaw(BigInt(0));
+    setLpSharePct("0");
+    setLpPooledUsdc("0.00");
+    setLpPooledEurc("0.00");
+    setPoolReserveUsdc("0.00");
+    setPoolReserveEurc("0.00");
+    setBalancesReady(false);
+    setBalancesLoading(false);
+    balanceCacheRef.current = { address: "", at: 0 };
+    lastSwapQuoteKeyRef.current = "";
+    lastLpQuoteKeyRef.current = "";
+    yieldPartsRef.current = { eurc: 0, usdc: 0 };
+    setLifetimePts(0);
+    setClaimedPts(0);
+    setHasCheckedInToday(false);
+    setStreak(0);
+    setLastCheckInTime(0);
+    setRegisteredDomain("");
+    setPassVerified(false);
+    setNetworkLatency(0);
+    setIsBatchMode(false);
+    setSendAddress("");
+    setSendAmount("");
+    setSendMemo("");
+    setIsScanning(false);
+    setShowSendModal(false);
+    setShowConfirmModal(false);
+    setShowReceiveModal(false);
+    setShowRequestModal(false);
+    setShowDomainSuccess(false);
+    setVaultInput("");
+    setSwapInput("");
+    setLpUsdcInput("");
+    setLpEurcInput("");
+    setLpRemoveInput("");
+    setLpRemoveIsMax(false);
+    setLpRemovePreviewUsdc("");
+    setLpRemovePreviewEurc("");
+    setSwapQuote("");
+    setSwapQuoteRaw(BigInt(0));
+    setSwapQuoteError("");
+    setRequestAmount("");
+    setPaymentLink("");
+    setDomainSearch("");
+    setDomainAvailable(false);
+    setTxHistory([]);
+    if (!options?.keepWallet) {
+      setChainId(null);
+    }
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const ethereum = getEthereum();
@@ -542,44 +635,19 @@ export default function Home() {
     };
     const handleAccountsChanged = (accounts: string[]) => {
       if (!accounts?.length) {
+        resetSessionState();
         setWallet("");
-        setUsdcBalance("0.00");
-        setEurcBalance("0.00");
-        setUsdcBalanceRaw(BigInt(0));
-        setEurcBalanceRaw(BigInt(0));
-        setWusdcBalanceRaw(BigInt(0));
-        setUsdcStakedBalance("0.00");
-        setEurcStakedBalance("0.00");
-        setLpBalance("0.00");
-        setLpBalanceRaw(BigInt(0));
-        setLpSharePct("0");
-        setLpPooledUsdc("0.00");
-        setLpPooledEurc("0.00");
-        setBalancesReady(false);
-        balanceCacheRef.current = { address: "", at: 0 };
-        lastSwapQuoteKeyRef.current = "";
-        lastLpQuoteKeyRef.current = "";
-        setLifetimePts(0);
-        setClaimedPts(0);
-        setHasCheckedInToday(false);
-        setStreak(0);
-        setLastCheckInTime(0);
-        setRegisteredDomain("");
-        setNetworkLatency(0);
-        setIsBatchMode(false);
-        setSendAddress("");
-        setSendMemo("");
-        setShowConfirmModal(false);
-        setShowReceiveModal(false);
-        setTxHistory([]);
         showMessage("Wallet Disconnected");
       } else {
         const newWallet = accounts[0];
+        resetSessionState({ keepWallet: true });
         setWallet(newWallet);
+        localStorage.removeItem("nexio_manual_disconnect");
         const savedHistory = localStorage.getItem(`nexio_history_${newWallet}`);
-        if (savedHistory) setTxHistory(JSON.parse(savedHistory));
+        setTxHistory(safeParseJson<ActivityItem[]>(savedHistory, []));
         const savedClaimedPts = localStorage.getItem(`nexio_claimed_pts_${newWallet}`);
-        if (savedClaimedPts) setClaimedPts(Number(savedClaimedPts));
+        const parsedClaimed = savedClaimedPts ? Number(savedClaimedPts) : 0;
+        setClaimedPts(Number.isFinite(parsedClaimed) ? parsedClaimed : 0);
       }
     };
 
@@ -602,6 +670,50 @@ export default function Home() {
     }, BALANCE_CACHE_MS);
     return () => clearInterval(intervalId);
   }, [wallet, isArcTestnet, fetchBalances]);
+
+  useEffect(() => {
+    if (!wallet || isArcTestnet) return;
+    setUsdcBalance("0.00");
+    setEurcBalance("0.00");
+    setUsdcBalanceRaw(BigInt(0));
+    setEurcBalanceRaw(BigInt(0));
+    setWusdcBalanceRaw(BigInt(0));
+    setUsdcStakedBalance("0.00");
+    setEurcStakedBalance("0.00");
+    setLpBalance("0.00");
+    setLpBalanceRaw(BigInt(0));
+    setLpSharePct("0");
+    setLpPooledUsdc("0.00");
+    setLpPooledEurc("0.00");
+    setBalancesReady(false);
+    balanceCacheRef.current = { address: "", at: 0 };
+  }, [wallet, isArcTestnet]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const verifyPass = async () => {
+      setPassVerified(false);
+      if (!wallet || !registeredDomain) return;
+      const nameOnly = sanitizeDomainName(registeredDomain);
+      if (!nameOnly) return;
+      try {
+        const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, getArcReadProvider());
+        const resolved = await ansContract.resolve(nameOnly) as string;
+        if (
+          !cancelled &&
+          resolved &&
+          resolved !== ethers.ZeroAddress &&
+          resolved.toLowerCase() === wallet.toLowerCase()
+        ) {
+          setPassVerified(true);
+        }
+      } catch {
+        if (!cancelled) setPassVerified(false);
+      }
+    };
+    void verifyPass();
+    return () => { cancelled = true; };
+  }, [wallet, registeredDomain]);
 
   const switchToArcTestnet = async () => {
     const ethereum = getEthereum();
@@ -646,6 +758,7 @@ export default function Home() {
       const signer = await provider.getSigner();
       await signer.signMessage("Sign in to Nexio");
 
+      localStorage.removeItem("nexio_manual_disconnect");
       setWallet(accounts[0]);
       const currentChainId = await syncNetwork();
       
@@ -665,37 +778,9 @@ export default function Home() {
   };
 
   const disconnectWallet = () => {
+    localStorage.setItem("nexio_manual_disconnect", "1");
+    resetSessionState();
     setWallet("");
-    setChainId(null);
-    setUsdcBalance("0.00");
-    setEurcBalance("0.00");
-    setUsdcBalanceRaw(BigInt(0));
-    setEurcBalanceRaw(BigInt(0));
-    setWusdcBalanceRaw(BigInt(0));
-    setUsdcStakedBalance("0.00");
-    setEurcStakedBalance("0.00");
-    setLpBalance("0.00");
-    setLpBalanceRaw(BigInt(0));
-    setLpSharePct("0");
-    setLpPooledUsdc("0.00");
-    setLpPooledEurc("0.00");
-    setBalancesReady(false);
-    balanceCacheRef.current = { address: "", at: 0 };
-    lastSwapQuoteKeyRef.current = "";
-    lastLpQuoteKeyRef.current = "";
-    setLifetimePts(0);
-    setClaimedPts(0);
-    setHasCheckedInToday(false);
-    setStreak(0);
-    setLastCheckInTime(0);
-    setRegisteredDomain("");
-    setNetworkLatency(0);
-    setIsBatchMode(false);
-    setSendAddress("");
-    setSendMemo("");
-    setShowConfirmModal(false);
-    setShowReceiveModal(false);
-    setTxHistory([]);
     showMessage("Wallet Disconnected");
   };
 
@@ -775,18 +860,50 @@ export default function Home() {
 
   const handleSendClick = () => {
     if (!wallet) return showMessage("Please connect wallet first to send");
+    if (isSending) return;
     if (!sendAddress || !sendAmount) return showMessage("Please fill required fields");
+
+    const amountNum = Number(sendAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) return showMessage("Enter a valid amount greater than 0");
     
-    const rawAddresses = isBatchMode ? sendAddress.split(',') : [sendAddress];
-    const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
+    const addresses = (isBatchMode ? sendAddress.split(",") : [sendAddress])
+      .map((a) => a.trim())
+      .filter((a) => a !== "");
 
     if (addresses.length === 0) return showMessage("Please enter at least one address");
+
+    const recipientCount = BigInt(addresses.length);
+    if (sendAsset === "USDC") {
+      const perAmount = parseAmount(sendAmount, WUSDC_DECIMALS);
+      if (!perAmount || perAmount <= BigInt(0)) return showMessage("Enter a valid amount greater than 0");
+      const totalNeeded = perAmount * recipientCount;
+      if (totalNeeded > maxNativeSpend(usdcBalanceRaw)) {
+        return showMessage(
+          isBatchMode
+            ? `Insufficient USDC for ${addresses.length} recipients (including gas).`
+            : "Insufficient USDC balance (including gas)."
+        );
+      }
+    } else {
+      const perAmount = parseAmount(sendAmount, EURC_DECIMALS);
+      if (!perAmount || perAmount <= BigInt(0)) return showMessage("Enter a valid amount greater than 0");
+      const totalNeeded = perAmount * recipientCount;
+      if (totalNeeded > eurcBalanceRaw) {
+        return showMessage(
+          isBatchMode
+            ? `Insufficient EURC for ${addresses.length} recipients.`
+            : "Insufficient EURC balance."
+        );
+      }
+    }
     
     setShowConfirmModal(true); 
   };
 
   const executeSend = async () => {
-    setShowConfirmModal(false); 
+    if (isSending || sendLockRef.current) return;
+    sendLockRef.current = true;
+    setIsSending(true);
     
     const rawAddresses = isBatchMode ? sendAddress.split(',') : [sendAddress];
     const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
@@ -794,11 +911,16 @@ export default function Home() {
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) {
+        sendLockRef.current = false;
+        setIsSending(false);
+        return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+      }
     }
 
+    setShowConfirmModal(false);
+
     try {
-      setIsSending(true);
       const ethereum = getEthereum();
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
@@ -833,34 +955,78 @@ export default function Home() {
       const memoHex = sendMemo ? ethers.hexlify(ethers.toUtf8Bytes(sendMemo)) : "0x";
       const memoBytes = sendMemo ? memoHex.replace("0x", "") : "";
       let successCount = 0;
+      const sendDecimals = sendAsset === "USDC" ? WUSDC_DECIMALS : EURC_DECIMALS;
+      const batchTotalRaw = (parseAmount(sendAmount, sendDecimals) ?? BigInt(0)) * BigInt(resolvedAddresses.length);
+      const batchTotalLabel = formatPretty(batchTotalRaw, sendDecimals, 6);
 
-      for (let i = 0; i < resolvedAddresses.length; i++) {
-        const currentTarget = resolvedAddresses[i];
-        const displayTarget = addresses[i];
+      if (isBatchMode) {
+        const MULTICALL3_FROM = "0x522fAf9A91c41c443c66765030741e4AaCe147D0";
+        const MULTICALL_ABI = ["function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[])"];
 
-        if (i > 0) { showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`); await sleep(500); }
-        if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
-        else showMessage("Confirm transaction in your wallet...");
+        // Native USDC ERC-20 precompile shares the native balance; it uses 6 decimals (native sends use 18).
+        const USDC_ERC20_ADDRESS = "0x3600000000000000000000000000000000000000";
+        const parsedAmount = ethers.parseUnits(sendAmount, 6);
+        const targetContractAddress = sendAsset === "USDC" ? USDC_ERC20_ADDRESS : EURC_ADDRESS;
+        const tokenContract = new ethers.Contract(targetContractAddress, ERC20_ABI, signer);
+        const calls: [string, boolean, string][] = [];
 
+        for (const currentTarget of resolvedAddresses) {
+          const transferData = tokenContract.interface.encodeFunctionData("transfer", [currentTarget, parsedAmount]);
+          const finalData = memoBytes ? transferData + memoBytes : transferData;
+          calls.push([targetContractAddress, false, finalData]);
+        }
+
+        showMessage("Confirm Batch Transaction in wallet...");
         try {
-          let tx: any;
-          if (sendAsset === "USDC") {
-            const parsedAmount = ethers.parseUnits(sendAmount, 18);
-            tx = await signer.sendTransaction({ to: currentTarget, value: parsedAmount, data: memoHex });
-          } else {
-            const parsedAmount = ethers.parseUnits(sendAmount, 6);
-            const contract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-            const transferData = contract.interface.encodeFunctionData("transfer", [currentTarget, parsedAmount]);
-            const finalData = memoBytes ? transferData + memoBytes : transferData;
-            tx = await signer.sendTransaction({ to: EURC_ADDRESS, data: finalData });
-          }
-          
-          showMessage(`Broadcasting ${sendAsset} to network...`);
+          const multicall = new ethers.Contract(MULTICALL3_FROM, MULTICALL_ABI, signer);
+          const tx = await multicall.aggregate3(calls);
+          showMessage("Broadcasting Batch Transfer...");
           const receipt = await tx.wait();
-          addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `-${sendAmount} ${sendAsset}`, `To ${displayTarget}${sendMemo ? ` (Memo: ${sendMemo})` : ""}`, "Completed", receipt?.hash || "");
-          successCount++;
+          addHistoryRecord(
+            `Batch Transfer ${sendAsset}`,
+            `-${batchTotalLabel} ${sendAsset}`,
+            `To ${resolvedAddresses.length} recipients${sendMemo ? ` (Memo: ${sendMemo})` : ""}`,
+            "Completed",
+            receipt?.hash || ""
+          );
+          successCount = resolvedAddresses.length;
         } catch (txError) {
-          addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `${sendAmount} ${sendAsset}`, `Failed: ${displayTarget}`, "Failed");
+          addHistoryRecord(
+            `Batch Transfer ${sendAsset}`,
+            `${batchTotalLabel} ${sendAsset}`,
+            `Failed: ${resolvedAddresses.length} recipients`,
+            "Failed"
+          );
+        }
+      } else {
+        for (let i = 0; i < resolvedAddresses.length; i++) {
+          const currentTarget = resolvedAddresses[i];
+          const displayTarget = addresses[i];
+
+          if (i > 0) { showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`); await sleep(500); }
+          if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
+          else showMessage("Confirm transaction in your wallet...");
+
+          try {
+            let tx: any;
+            if (sendAsset === "USDC") {
+              const parsedAmount = ethers.parseUnits(sendAmount, 18);
+              tx = await signer.sendTransaction({ to: currentTarget, value: parsedAmount, data: memoHex });
+            } else {
+              const parsedAmount = ethers.parseUnits(sendAmount, 6);
+              const contract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
+              const transferData = contract.interface.encodeFunctionData("transfer", [currentTarget, parsedAmount]);
+              const finalData = memoBytes ? transferData + memoBytes : transferData;
+              tx = await signer.sendTransaction({ to: EURC_ADDRESS, data: finalData });
+            }
+            
+            showMessage(`Broadcasting ${sendAsset} to network...`);
+            const receipt = await tx.wait();
+            addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `-${sendAmount} ${sendAsset}`, `To ${displayTarget}${sendMemo ? ` (Memo: ${sendMemo})` : ""}`, "Completed", receipt?.hash || "");
+            successCount++;
+          } catch (txError) {
+            addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `${sendAmount} ${sendAsset}`, `Failed: ${displayTarget}`, "Failed");
+          }
         }
       }
       
@@ -874,6 +1040,7 @@ export default function Home() {
     } catch (error) {
       showMessage("Operation failed. Check wallet connection.");
     } finally {
+      sendLockRef.current = false;
       setIsSending(false);
     }
   };
@@ -886,7 +1053,7 @@ export default function Home() {
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
     }
 
     setIsVaultLoading(true);
@@ -901,7 +1068,10 @@ export default function Home() {
 
       if (vaultAsset === "USDC") {
          const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
-         const amountWei = ethers.parseUnits(vaultInput, 18); 
+         const amountWei = ethers.parseUnits(vaultInput, 18);
+         if (action === "stake" && amountWei > maxNativeSpend(usdcBalanceRaw)) {
+            return showMessage("Insufficient USDC balance (including gas).");
+         }
 
          if (action === "stake") {
             showMessage("Depositing USDC in progress...");
@@ -921,10 +1091,8 @@ export default function Home() {
          const amountWei = ethers.parseUnits(vaultInput, 6); 
 
          if (action === "stake") {
-            showMessage("Approving EURC for staking...");
             const tokenContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-            const approveTx = await tokenContract.approve(EURC_VAULT_ADDRESS, amountWei);
-            await approveTx.wait();
+            await ensureTokenAllowance(tokenContract, wallet, EURC_VAULT_ADDRESS, amountWei, "EURC");
 
             showMessage("Deposit in progress. Confirm in wallet...");
             tx = await vaultContract.deposit(amountWei);
@@ -1216,15 +1384,23 @@ export default function Home() {
       if (!ethereum) return showMessage("Wallet not found");
       const readProvider = getArcReadProvider();
       const pairState = await fetchPairState(readProvider, EURC_ADDRESS, { force: true });
-      if (!pairState || pairState.reserveWusdc === BigInt(0) || pairState.reserveEurc === BigInt(0)) {
-        return showMessage("Pool has no liquidity yet.");
+      if (!pairState) {
+        return showMessage("Liquidity pair not found.");
       }
 
       const routerRead = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, readProvider);
       let amountUsdc: bigint;
       let amountEurc: bigint;
+      const poolEmpty = pairState.reserveWusdc === BigInt(0) || pairState.reserveEurc === BigInt(0);
 
-      if (lpLastEdited === "usdc") {
+      if (poolEmpty) {
+        const parsedUsdc = parseAmount(lpUsdcInput, WUSDC_DECIMALS);
+        const parsedEurc = parseAmount(lpEurcInput, EURC_DECIMALS);
+        if (!parsedUsdc || parsedUsdc <= BigInt(0)) return showMessage("Enter a valid USDC amount");
+        if (!parsedEurc || parsedEurc <= BigInt(0)) return showMessage("Enter a valid EURC amount");
+        amountUsdc = parsedUsdc;
+        amountEurc = parsedEurc;
+      } else if (lpLastEdited === "usdc") {
         const parsed = parseAmount(lpUsdcInput, WUSDC_DECIMALS);
         if (!parsed || parsed <= BigInt(0)) return showMessage("Enter a valid USDC amount");
         amountUsdc = parsed;
@@ -1355,7 +1531,7 @@ export default function Home() {
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
     }
 
     setIsVaultLoading(true);
@@ -1399,7 +1575,7 @@ export default function Home() {
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
     }
     if (hasCheckedInToday) return showMessage("Already checked in today! Come back tomorrow.");
 
@@ -1428,23 +1604,15 @@ export default function Home() {
   };
 
   const handleSearchDomain = async () => {
-    let cleanSearch = domainSearch.trim().toLowerCase();
-    cleanSearch = cleanSearch.replace(/\.nex$/, "");
-    cleanSearch = cleanSearch.replace(/[^a-z0-9-]/g, '');
+    const cleanSearch = sanitizeDomainName(domainSearch);
+    setDomainSearch(cleanSearch);
 
     if (!cleanSearch) return showMessage("Enter a valid domain name");
     
     setIsCheckingDomain(true);
+    setDomainAvailable(false);
     try {
-      let provider;
-      const eth = getEthereum();
-      if (eth) {
-        provider = new ethers.BrowserProvider(eth);
-      } else {
-        provider = new ethers.JsonRpcProvider(ARC_RPC, undefined, { staticNetwork: true });
-      }
-      
-      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, provider);
+      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, getArcReadProvider());
       const available = await ansContract.isAvailable(cleanSearch);
       
       if (available) {
@@ -1487,7 +1655,7 @@ export default function Home() {
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
-      if (!switched) return;
+      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
     }
 
     try {
@@ -1498,9 +1666,9 @@ export default function Home() {
 
       const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, signer);
       
-      let cleanName = domainSearch.toLowerCase();
-      cleanName = cleanName.replace(/\.nex$/, "");
-      cleanName = cleanName.replace(/[^a-z0-9-]/g, '');
+      const cleanName = sanitizeDomainName(domainSearch);
+      if (!cleanName) return showMessage("Enter a valid domain name");
+      setDomainSearch(cleanName);
 
       showMessage("Confirm Registration in Wallet...");
       
@@ -1747,13 +1915,23 @@ export default function Home() {
             <div className={`rounded-2xl p-4 mb-6 border space-y-3 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
               <div className="flex justify-between items-center">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Asset</span>
-                <span className={`font-black text-lg ${tc.textMain}`}>{sendAmount} {sendAsset}</span>
+                <span className={`font-black text-lg ${tc.textMain}`}>
+                  {(() => {
+                    const recipients = (isBatchMode ? sendAddress.split(",") : [sendAddress]).map((a) => a.trim()).filter((a) => a !== "");
+                    const count = isBatchMode ? Math.max(recipients.length, 1) : 1;
+                    const decimals = sendAsset === "USDC" ? WUSDC_DECIMALS : EURC_DECIMALS;
+                    const per = parseAmount(sendAmount, decimals);
+                    const total = per ? per * BigInt(count) : null;
+                    const label = total ? formatPretty(total, decimals, 6) : sendAmount;
+                    return `${label} ${sendAsset}`;
+                  })()}
+                </span>
               </div>
               <div className="flex justify-between items-start">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-1">To</span>
                 <div className="text-right">
                   {isBatchMode ? (
-                    <span className={`text-sm font-mono font-bold ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>{sendAddress.split(',').length} Recipients</span>
+                    <span className={`text-sm font-mono font-bold ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>{(sendAddress.split(',').map((a) => a.trim()).filter((a) => a !== "")).length} Recipients</span>
                   ) : (
                     <span className={`text-sm font-mono font-bold break-all ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>{sendAddress}</span>
                   )}
@@ -1768,8 +1946,8 @@ export default function Home() {
             </div>
 
             <div className="flex gap-3">
-              <button onClick={() => setShowConfirmModal(false)} className={`flex-1 rounded-xl py-3 font-bold transition-all border ${theme === 'dark' ? 'bg-gray-800 text-white border-transparent hover:bg-gray-700' : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300'}`}>Cancel</button>
-              <button onClick={executeSend} className="flex-1 rounded-xl bg-cyan-500 text-white py-3 font-black hover:bg-cyan-400 transition-all shadow-lg active:scale-95">Confirm & Send</button>
+              <button onClick={() => setShowConfirmModal(false)} disabled={isSending} className={`flex-1 rounded-xl py-3 font-bold transition-all border disabled:opacity-50 ${theme === 'dark' ? 'bg-gray-800 text-white border-transparent hover:bg-gray-700' : 'bg-slate-200 text-slate-800 border-slate-300 hover:bg-slate-300'}`}>Cancel</button>
+              <button onClick={executeSend} disabled={isSending} className="flex-1 rounded-xl bg-cyan-500 text-white py-3 font-black hover:bg-cyan-400 transition-all shadow-lg active:scale-95 disabled:opacity-50 disabled:active:scale-100">{isSending ? "Processing..." : "Confirm & Send"}</button>
             </div>
           </div>
         </div>
@@ -1914,7 +2092,12 @@ export default function Home() {
             Learn
           </button>
 
-          <div className="mt-auto pt-6 border-t border-white/5">
+          <div className="mt-auto pt-6 border-t border-white/5 space-y-2">
+             {wallet && (
+               <button onClick={() => { setIsSidebarOpen(false); disconnectWallet(); }} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border ${theme === 'dark' ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white' : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-500 hover:text-white'}`}>
+                  Disconnect Wallet
+               </button>
+             )}
              <button onClick={toggleTheme} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border flex items-center justify-center gap-2 ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-yellow-400' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-indigo-900'}`}>
                 {theme === 'dark' ? '☀️ Switch to Light Mode' : '🌙 Switch to Dark Mode'}
              </button>
@@ -2055,7 +2238,7 @@ export default function Home() {
                          className={`w-full rounded-xl border px-4 py-3 focus:outline-none transition font-bold text-lg ${tc.inputBg}`}
                        />
                        <button 
-                         onClick={() => setVaultInput(vaultAsset === "USDC" ? usdcBalance : eurcBalance)}
+                         onClick={() => setVaultInput(vaultAsset === "USDC" ? formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS) : formatExact(eurcBalanceRaw, EURC_DECIMALS))}
                          className={`absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}
                        >
                          Max
@@ -2497,10 +2680,7 @@ export default function Home() {
                     type="text" 
                     value={domainSearch}
                     onChange={(e) => { 
-                      let val = e.target.value.toLowerCase();
-                      val = val.replace(/\.nex$/, "");
-                      val = val.replace(/[^a-z0-9-]/g, '');
-                      setDomainSearch(val); 
+                      setDomainSearch(sanitizeDomainName(e.target.value)); 
                       setDomainAvailable(false); 
                     }}
                     placeholder="Search a name (e.g. jubayir69)" 
@@ -2541,11 +2721,15 @@ export default function Home() {
               <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-10 flex flex-col items-center justify-center min-h-[50vh] md:min-h-[60vh] relative overflow-hidden animate-in fade-in zoom-in-95 duration-500 ${theme === 'dark' ? 'border border-white/10 bg-white/[0.02] backdrop-blur-3xl shadow-2xl' : 'border border-slate-200 bg-white shadow-xl'}`}>
                 {theme === 'dark' && <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 md:w-96 md:h-96 bg-cyan-500/20 rounded-full blur-[80px] md:blur-[100px] pointer-events-none"></div>}
 
-                {!registeredDomain ? (
+                {!registeredDomain || !passVerified ? (
                   <div className="text-center z-10 max-w-lg px-4">
                     <div className="text-5xl md:text-7xl mb-4 md:mb-6 animate-pulse pointer-events-none">🪪</div>
                     <h2 className={`text-2xl md:text-3xl font-black mb-3 md:mb-4 ${tc.textMain}`}>Unlock Your Nexio Pass</h2>
-                    <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>You need to register a .nex domain to generate your exclusive Web3 Holographic Identity Card.</p>
+                    <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>
+                      {registeredDomain && !passVerified
+                        ? "This domain is not verified on-chain for the connected wallet. Register or use a .nex name that resolves to your address."
+                        : "You need to register a .nex domain to generate your exclusive Web3 Holographic Identity Card."}
+                    </p>
                     <button onClick={() => handleTabSwitch("domains")} className="bg-cyan-500 hover:bg-cyan-600 text-white font-black px-6 py-3 md:px-8 md:py-4 rounded-full transition-all active:scale-95 shadow-lg text-sm md:text-base">
                       Register Domain Now
                     </button>
