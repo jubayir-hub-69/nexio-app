@@ -290,14 +290,10 @@ export async function resolveAddressToDomain(
 ): Promise<string | null> {
   if (!address || !ethers.isAddress(address)) return null;
   const p = provider || getArcReadProvider();
-  try {
-    const contract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, p);
-    const domain = (await contract.resolveByAddress(address)) as string;
-    if (!domain || !domain.trim()) return null;
-    return sanitizeAnsName(domain);
-  } catch {
-    return null;
-  }
+  const contract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, p);
+  const domain = (await contract.resolveByAddress(address)) as string;
+  if (!domain || !domain.trim()) return null;
+  return sanitizeAnsName(domain);
 }
 
 export async function resolveDomainToAddress(

@@ -127,6 +127,9 @@ export default function Home() {
   const lastSwapQuoteKeyRef = useRef("");
   const lastLpQuoteKeyRef = useRef("");
   const walletRef = useRef("");
+  const registeredDomainRef = useRef("");
+  const resolveAddressGenRef = useRef(0);
+  const verifyPassGenRef = useRef(0);
   const messageTimerRef = useRef<number | null>(null);
   const sendLockRef = useRef(false);
   const yieldPartsRef = useRef({ eurc: 0, usdc: 0 });
@@ -231,6 +234,7 @@ export default function Home() {
   const isArcTestnet = chainId === ARC_CHAIN_ID;
   txBusyRef.current = isSending || isVaultLoading || isSwapping || isLpLoading;
   walletRef.current = wallet;
+  registeredDomainRef.current = registeredDomain;
 
   // --- PORTFOLIO CALCULATION LOGIC ---
   const usdcWalletValue = parseFloat(usdcBalance || "0");
@@ -640,6 +644,7 @@ export default function Home() {
     setRegisteredDomain("");
     setPassVerified(false);
     setIsVerifyingPass(false);
+    verifyPassGenRef.current += 1;
     setNetworkLatency(0);
     setIsBatchMode(false);
     setSendAddress("");
@@ -744,17 +749,29 @@ export default function Home() {
   }, [wallet, isArcTestnet]);
 
   const fetchAndVerifyPass = useCallback(async (userWallet?: string) => {
-    const target = userWallet || wallet;
+    const target = userWallet || walletRef.current;
     if (!target || !ethers.isAddress(target)) {
       setPassVerified(false);
       setIsVerifyingPass(false);
       return;
     }
 
+    const gen = ++verifyPassGenRef.current;
+    const isStale = () =>
+      gen !== verifyPassGenRef.current ||
+      !walletRef.current ||
+      walletRef.current.toLowerCase() !== target.toLowerCase();
+
     setIsVerifyingPass(true);
     try {
       // 1. Actively query resolveByAddress from the ANS smart contract (0x19c27c2a8729e8A326dF24EF740832b09A607fD0)
-      const onChainDomain = await resolveAddressToDomain(target);
+      let onChainDomain: string | null = null;
+      try {
+        onChainDomain = await resolveAddressToDomain(target);
+      } catch (e) {
+        console.error("fetchAndVerifyPass reverse lookup error:", e);
+      }
+      if (isStale()) return;
       if (onChainDomain && onChainDomain.trim().length > 0) {
         const formatted = `${onChainDomain}.nex`;
         setRegisteredDomain(formatted);
@@ -764,11 +781,12 @@ export default function Home() {
       }
 
       // 2. Fallback: check stored domain forward resolution
-      const currentOrStored = registeredDomain || localStorage.getItem(`nexio_domain_name_${target}`) || "";
+      const currentOrStored = registeredDomainRef.current || localStorage.getItem(`nexio_domain_name_${target}`) || "";
       if (currentOrStored) {
         const nameOnly = sanitizeDomainName(currentOrStored);
         if (nameOnly) {
           const resolved = await resolveDomainToAddress(nameOnly);
+          if (isStale()) return;
           if (resolved && resolved.toLowerCase() === target.toLowerCase()) {
             setRegisteredDomain(`${nameOnly}.nex`);
             setPassVerified(true);
@@ -777,26 +795,15 @@ export default function Home() {
         }
       }
 
+      if (isStale()) return;
       setPassVerified(false);
     } catch (e) {
       console.error("fetchAndVerifyPass error:", e);
-      setPassVerified(false);
+      if (!isStale()) setPassVerified(false);
     } finally {
-      setIsVerifyingPass(false);
+      if (!isStale()) setIsVerifyingPass(false);
     }
-  }, [wallet, registeredDomain]);
-
-  useEffect(() => {
-    if (wallet) {
-      void fetchAndVerifyPass(wallet);
-    }
-  }, [wallet, fetchAndVerifyPass]);
-
-  useEffect(() => {
-    if (wallet && selectedTab === "trustpass") {
-      void fetchAndVerifyPass(wallet);
-    }
-  }, [wallet, selectedTab, fetchAndVerifyPass]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1755,6 +1762,7 @@ export default function Home() {
       return;
     }
     if (!ethers.isAddress(rawTarget)) {
+      resolveAddressGenRef.current += 1;
       setResolvedDomainResult(null);
       setResolvedOwnerAddress(rawTarget);
       setResolvedAddressError("Invalid EVM wallet address format (must start with 0x and be 42 characters).");
@@ -1762,6 +1770,7 @@ export default function Home() {
       return;
     }
 
+    const gen = ++resolveAddressGenRef.current;
     setIsResolvingAddress(true);
     setResolvedAddressError(null);
     setResolvedDomainResult(null);
@@ -1770,6 +1779,7 @@ export default function Home() {
 
     try {
       const domain = await resolveAddressToDomain(rawTarget);
+      if (gen !== resolveAddressGenRef.current) return;
       if (domain && domain.trim().length > 0) {
         setResolvedDomainResult(domain);
         setResolvedAddressError(null);
@@ -1780,10 +1790,13 @@ export default function Home() {
       }
     } catch (error) {
       console.error("Reverse resolution error:", error);
+      if (gen !== resolveAddressGenRef.current) return;
       setResolvedDomainResult(null);
-      setResolvedAddressError("No .nex domain registered for this address on Arc Testnet.");
+      setResolvedAddressError("Network error. Could not query Arc Name Service. Please try again.");
     } finally {
-      setIsResolvingAddress(false);
+      if (gen === resolveAddressGenRef.current) {
+        setIsResolvingAddress(false);
+      }
     }
   };
 
@@ -3029,6 +3042,7 @@ export default function Home() {
                             type="text"
                             value={resolveAddressInput}
                             onChange={(e) => {
+                              resolveAddressGenRef.current += 1;
                               setResolveAddressInput(e.target.value.trim());
                               setResolvedDomainResult(null);
                               setResolvedAddressError(null);
@@ -3043,6 +3057,7 @@ export default function Home() {
                             <button
                               type="button"
                               onClick={() => {
+                                resolveAddressGenRef.current += 1;
                                 setResolveAddressInput("");
                                 setResolvedDomainResult(null);
                                 setResolvedAddressError(null);
