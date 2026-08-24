@@ -7,6 +7,15 @@ export const DAILY_GM_ABI = [
   "function streak(address) external view returns (uint256)"
 ];
 
+export const ANS_CONTRACT_ADDRESS = "0x19c27c2a8729e8A326dF24EF740832b09A607fD0";
+export const ANS_ABI = [
+  "function register(string _name) external",
+  "function resolve(string _name) external view returns (address)",
+  "function resolveByAddress(address _owner) external view returns (string memory)",
+  "function isAvailable(string _name) external view returns (bool)",
+  "event DomainRegistered(string indexed name, address indexed owner)"
+];
+
 export const WUSDC_ADDRESS = "0xDe5DB9049a8dd344dC1B7Bbb098f9da60930A6dA";
 export const FACTORY_ADDRESS = "0x7cC023C7184810B84657D55c1943eBfF8603B72B";
 export const ROUTER_ADDRESS = "0xB92428D440c335546b69138F7fAF689F5ba8D436";
@@ -265,3 +274,61 @@ export function underlyingFromLp(
     eurc: (lpAmount * reserveEurc) / totalSupply,
   };
 }
+
+export function sanitizeAnsName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/\.nex$/i, "")
+    .replace(/\.arc$/i, "")
+    .replace(/[^a-z0-9-]/g, "");
+}
+
+export async function resolveAddressToDomain(
+  address: string,
+  provider?: ethers.Provider
+): Promise<string | null> {
+  if (!address || !ethers.isAddress(address)) return null;
+  const p = provider || getArcReadProvider();
+  try {
+    const contract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, p);
+    const domain = (await contract.resolveByAddress(address)) as string;
+    if (!domain || !domain.trim()) return null;
+    return sanitizeAnsName(domain);
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveDomainToAddress(
+  name: string,
+  provider?: ethers.Provider
+): Promise<string | null> {
+  const clean = sanitizeAnsName(name);
+  if (!clean) return null;
+  const p = provider || getArcReadProvider();
+  try {
+    const contract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, p);
+    const address = (await contract.resolve(clean)) as string;
+    if (!address || address === ethers.ZeroAddress) return null;
+    return address;
+  } catch {
+    return null;
+  }
+}
+
+export async function isDomainAvailable(
+  name: string,
+  provider?: ethers.Provider
+): Promise<boolean> {
+  const clean = sanitizeAnsName(name);
+  if (!clean) return false;
+  const p = provider || getArcReadProvider();
+  try {
+    const contract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, p);
+    return Boolean(await contract.isAvailable(clean));
+  } catch {
+    return false;
+  }
+}
+

@@ -10,6 +10,8 @@ import {
   ROUTER_ADDRESS,
   DAILY_GM_ADDRESS,
   DAILY_GM_ABI,
+  ANS_CONTRACT_ADDRESS,
+  ANS_ABI,
   WUSDC_DECIMALS,
   EURC_DECIMALS,
   LP_DECIMALS,
@@ -34,6 +36,10 @@ import {
   SLIPPAGE_PRESETS,
   swapDeadline,
   underlyingFromLp,
+  sanitizeAnsName,
+  resolveAddressToDomain,
+  resolveDomainToAddress,
+  isDomainAvailable,
 } from "@/lib/contracts";
 
 const QrScanner = dynamic(
@@ -48,10 +54,9 @@ const ARC_EXPLORER = "https://testnet.arcscan.app";
 const ARC_FAUCET = "https://faucet.circle.com";
 
 const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
-const ANS_CONTRACT_ADDRESS = "0x68A2a776BaE48fd0bB7a409a9709d61A34Ced42c";
 
 // REAL DEPLOYED SMART CONTRACTS
-const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC"; 
+const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC";
 const USDC_VAULT_ADDRESS = "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8";
 
 const ERC20_ABI = [
@@ -59,12 +64,6 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
   "function approve(address spender, uint256 amount) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)"
-];
-
-const ANS_ABI = [
-  "function register(string _name) external",
-  "function resolve(string _name) external view returns (address)",
-  "function isAvailable(string _name) external view returns (bool)"
 ];
 
 const EURC_VAULT_ABI = [
@@ -110,7 +109,7 @@ export default function Home() {
   const [wallet, setWallet] = useState("");
   const [message, setMessage] = useState("");
   const [chainId, setChainId] = useState<number | null>(null);
-  
+
   const [selectedTab, setSelectedTab] = useState<"overview" | "portfolio" | "swap" | "lp" | "dailygm" | "domains" | "trustpass" | "history" | "learn">("overview");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
@@ -132,6 +131,7 @@ export default function Home() {
   const sendLockRef = useRef(false);
   const yieldPartsRef = useRef({ eurc: 0, usdc: 0 });
   const [passVerified, setPassVerified] = useState(false);
+  const [isVerifyingPass, setIsVerifyingPass] = useState(false);
 
   const [showSendModal, setShowSendModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -163,6 +163,17 @@ export default function Home() {
   const [registeredDomain, setRegisteredDomain] = useState("");
   const [registrationHash, setRegistrationHash] = useState("");
 
+  // REVERSE DOMAIN RESOLUTION STATES
+  const [domainSubTab, setDomainSubTab] = useState<"register" | "reverse">("register");
+  const [resolveAddressInput, setResolveAddressInput] = useState("");
+  const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const [resolvedDomainResult, setResolvedDomainResult] = useState<string | null>(null);
+  const [resolvedOwnerAddress, setResolvedOwnerAddress] = useState<string | null>(null);
+  const [resolvedAddressError, setResolvedAddressError] = useState<string | null>(null);
+  const [hasSearchedAddress, setHasSearchedAddress] = useState(false);
+  const [resolvedRecipientDomain, setResolvedRecipientDomain] = useState<string | null>(null);
+  const [isResolvingRecipient, setIsResolvingRecipient] = useState(false);
+
   const [txHistory, setTxHistory] = useState<ActivityItem[]>([]);
   const [networkLatency, setNetworkLatency] = useState(0);
 
@@ -171,7 +182,7 @@ export default function Home() {
   const [usdcStakedBalance, setUsdcStakedBalance] = useState("0.00");
   const [eurcStakedBalance, setEurcStakedBalance] = useState("0.00");
   const [liveEurcUsdRate, setLiveEurcUsdRate] = useState<number>(1.09);
-  
+
   const [lifetimePts, setLifetimePts] = useState(0);
   const [claimedPts, setClaimedPts] = useState(0);
   const unclaimedPts = claimedPts > lifetimePts
@@ -180,7 +191,7 @@ export default function Home() {
 
   const [vaultInput, setVaultInput] = useState("");
   const [isVaultLoading, setIsVaultLoading] = useState(false);
-  const [vaultAction, setVaultAction] = useState<"stake"|"withdraw"|"claim" | null>(null);
+  const [vaultAction, setVaultAction] = useState<"stake" | "withdraw" | "claim" | null>(null);
 
   // SWAP STATES
   const [swapInput, setSwapInput] = useState("");
@@ -229,18 +240,18 @@ export default function Home() {
   const lpUsdcValue = parseFloat(lpPooledUsdc || "0");
   const lpEurcValue = parseFloat(lpPooledEurc || "0");
   const wusdcWalletValue = parseFloat(formatPretty(wusdcBalanceRaw, WUSDC_DECIMALS, 6) || "0");
-  
+
   const totalUsdcValue = usdcWalletValue + uStakedValue + lpUsdcValue + wusdcWalletValue;
-  const totalEurcValue = eurcWalletValue + eStakedValue + lpEurcValue; 
-  const eurcUsdRate = liveEurcUsdRate; 
+  const totalEurcValue = eurcWalletValue + eStakedValue + lpEurcValue;
+  const eurcUsdRate = liveEurcUsdRate;
   const netWorthUsd = totalUsdcValue + (totalEurcValue * eurcUsdRate);
-  
+
   const usdcPercent = netWorthUsd > 0 ? ((totalUsdcValue / netWorthUsd) * 100).toFixed(0) : "0";
   const eurcPercent = netWorthUsd > 0 ? (((totalEurcValue * eurcUsdRate) / netWorthUsd) * 100).toFixed(0) : "0";
 
   let totalVolume = 0;
   txHistory.forEach(tx => {
-    if(tx.status === "Completed" && tx.amount && tx.amount.startsWith("-")) {
+    if (tx.status === "Completed" && tx.amount && tx.amount.startsWith("-")) {
       totalVolume += parseFloat(tx.amount.replace(/[^0-9.]/g, ""));
     }
   });
@@ -263,9 +274,9 @@ export default function Home() {
         setSendAmount(amount);
         if (token === "EURC") setSendAsset("EURC");
         else setSendAsset("USDC");
-        
+
         setShowSendModal(true);
-        
+
         setTimeout(() => {
           showMessage(`Payment Request Received: ${amount} ${token || "USDC"}`);
         }, 1500);
@@ -316,7 +327,7 @@ export default function Home() {
       if (rabby) return rabby;
       const metaMask = eth.providers.find((p: any) => p.isMetaMask && !p.isPhantom);
       if (metaMask) return metaMask;
-      return eth.providers[0]; 
+      return eth.providers[0];
     }
     return eth;
   };
@@ -511,7 +522,7 @@ export default function Home() {
         setWallet("");
       }
       await syncNetwork();
-    } catch {}
+    } catch { }
   };
 
   useEffect(() => {
@@ -529,8 +540,9 @@ export default function Home() {
     }
 
     const myDomain = localStorage.getItem(`nexio_domain_name_${wallet}`) || "";
-    setRegisteredDomain(myDomain);
-    setPassVerified(false);
+    if (myDomain) {
+      setRegisteredDomain(myDomain);
+    }
 
     const savedHistory = localStorage.getItem(`nexio_history_${wallet}`);
     setTxHistory(safeParseJson<ActivityItem[]>(savedHistory, []));
@@ -539,6 +551,40 @@ export default function Home() {
     const parsedClaimed = savedClaimedPts ? Number(savedClaimedPts) : 0;
     setClaimedPts(Number.isFinite(parsedClaimed) ? parsedClaimed : 0);
 
+    let cancelled = false;
+    const syncUserIdentity = async () => {
+      try {
+        const onChainName = await resolveAddressToDomain(wallet);
+        if (!cancelled && onChainName) {
+          const formatted = `${onChainName}.nex`;
+          setRegisteredDomain(formatted);
+          setPassVerified(true);
+          localStorage.setItem(`nexio_domain_name_${wallet}`, formatted);
+          return;
+        }
+      } catch { }
+
+      if (myDomain && !cancelled) {
+        const nameOnly = sanitizeDomainName(myDomain);
+        try {
+          const resolved = await resolveDomainToAddress(nameOnly);
+          if (!cancelled && resolved && resolved.toLowerCase() === wallet.toLowerCase()) {
+            setPassVerified(true);
+            return;
+          }
+        } catch { }
+      }
+
+      if (!cancelled) {
+        setPassVerified(false);
+      }
+    };
+
+    void syncUserIdentity();
+
+    return () => {
+      cancelled = true;
+    };
   }, [wallet]);
 
   useEffect(() => {
@@ -593,6 +639,7 @@ export default function Home() {
     setLastCheckInTime(0);
     setRegisteredDomain("");
     setPassVerified(false);
+    setIsVerifyingPass(false);
     setNetworkLatency(0);
     setIsBatchMode(false);
     setSendAddress("");
@@ -616,9 +663,16 @@ export default function Home() {
     setSwapQuoteRaw(BigInt(0));
     setSwapQuoteError("");
     setRequestAmount("");
-    setPaymentLink("");
     setDomainSearch("");
     setDomainAvailable(false);
+    setDomainSubTab("register");
+    setResolveAddressInput("");
+    setResolvedDomainResult(null);
+    setResolvedOwnerAddress(null);
+    setResolvedAddressError(null);
+    setHasSearchedAddress(false);
+    setResolvedRecipientDomain(null);
+    setIsResolvingRecipient(false);
     setTxHistory([]);
     if (!options?.keepWallet) {
       setChainId(null);
@@ -689,36 +743,101 @@ export default function Home() {
     balanceCacheRef.current = { address: "", at: 0 };
   }, [wallet, isArcTestnet]);
 
+  const fetchAndVerifyPass = useCallback(async (userWallet?: string) => {
+    const target = userWallet || wallet;
+    if (!target || !ethers.isAddress(target)) {
+      setPassVerified(false);
+      setIsVerifyingPass(false);
+      return;
+    }
+
+    setIsVerifyingPass(true);
+    try {
+      // 1. Actively query resolveByAddress from the ANS smart contract (0x19c27c2a8729e8A326dF24EF740832b09A607fD0)
+      const onChainDomain = await resolveAddressToDomain(target);
+      if (onChainDomain && onChainDomain.trim().length > 0) {
+        const formatted = `${onChainDomain}.nex`;
+        setRegisteredDomain(formatted);
+        setPassVerified(true);
+        localStorage.setItem(`nexio_domain_name_${target}`, formatted);
+        return;
+      }
+
+      // 2. Fallback: check stored domain forward resolution
+      const currentOrStored = registeredDomain || localStorage.getItem(`nexio_domain_name_${target}`) || "";
+      if (currentOrStored) {
+        const nameOnly = sanitizeDomainName(currentOrStored);
+        if (nameOnly) {
+          const resolved = await resolveDomainToAddress(nameOnly);
+          if (resolved && resolved.toLowerCase() === target.toLowerCase()) {
+            setRegisteredDomain(`${nameOnly}.nex`);
+            setPassVerified(true);
+            return;
+          }
+        }
+      }
+
+      setPassVerified(false);
+    } catch (e) {
+      console.error("fetchAndVerifyPass error:", e);
+      setPassVerified(false);
+    } finally {
+      setIsVerifyingPass(false);
+    }
+  }, [wallet, registeredDomain]);
+
+  useEffect(() => {
+    if (wallet) {
+      void fetchAndVerifyPass(wallet);
+    }
+  }, [wallet, fetchAndVerifyPass]);
+
+  useEffect(() => {
+    if (wallet && selectedTab === "trustpass") {
+      void fetchAndVerifyPass(wallet);
+    }
+  }, [wallet, selectedTab, fetchAndVerifyPass]);
+
   useEffect(() => {
     let cancelled = false;
-    const verifyPass = async () => {
-      setPassVerified(false);
-      if (!wallet || !registeredDomain) return;
-      const nameOnly = sanitizeDomainName(registeredDomain);
-      if (!nameOnly) return;
-      try {
-        const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, getArcReadProvider());
-        const resolved = await ansContract.resolve(nameOnly) as string;
-        if (
-          !cancelled &&
-          resolved &&
-          resolved !== ethers.ZeroAddress &&
-          resolved.toLowerCase() === wallet.toLowerCase()
-        ) {
-          setPassVerified(true);
+    const target = sendAddress.trim();
+    if (!target || isBatchMode) {
+      setResolvedRecipientDomain(null);
+      setIsResolvingRecipient(false);
+      return;
+    }
+
+    if (ethers.isAddress(target)) {
+      setIsResolvingRecipient(true);
+      const timer = setTimeout(async () => {
+        try {
+          const domain = await resolveAddressToDomain(target);
+          if (!cancelled && domain) {
+            setResolvedRecipientDomain(`${domain}.nex`);
+          } else if (!cancelled) {
+            setResolvedRecipientDomain(null);
+          }
+        } catch {
+          if (!cancelled) setResolvedRecipientDomain(null);
+        } finally {
+          if (!cancelled) setIsResolvingRecipient(false);
         }
-      } catch {
-        if (!cancelled) setPassVerified(false);
-      }
-    };
-    void verifyPass();
-    return () => { cancelled = true; };
-  }, [wallet, registeredDomain]);
+      }, 350);
+
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
+    } else {
+      setResolvedRecipientDomain(null);
+      setIsResolvingRecipient(false);
+    }
+  }, [sendAddress, isBatchMode]);
 
   const switchToArcTestnet = async () => {
     const ethereum = getEthereum();
     if (!ethereum) return false;
-    
+
     try {
       await ethereum.request({
         method: "wallet_switchEthereumChain",
@@ -750,7 +869,7 @@ export default function Home() {
     try {
       const ethereum = getEthereum();
       if (!ethereum) return showMessage("Install Rabby or MetaMask extension properly");
-      
+
       const provider = new ethers.BrowserProvider(ethereum);
       const accounts = await provider.send("eth_requestAccounts", []);
       if (!accounts?.length) return;
@@ -761,7 +880,7 @@ export default function Home() {
       localStorage.removeItem("nexio_manual_disconnect");
       setWallet(accounts[0]);
       const currentChainId = await syncNetwork();
-      
+
       if (currentChainId !== ARC_CHAIN_ID) {
         showMessage("Switching to Arc Testnet...");
         const switched = await switchToArcTestnet();
@@ -770,7 +889,7 @@ export default function Home() {
       } else {
         showMessage("Wallet Connected Successfully");
       }
-      
+
       void fetchBalances(accounts[0]);
     } catch (error) {
       showMessage("Connection Rejected or Wallet Blocked");
@@ -815,7 +934,7 @@ export default function Home() {
   const generatePaymentLink = () => {
     if (!requestAmount) return showMessage("Enter an amount");
     if (parseFloat(requestAmount) <= 0) return showMessage("Invalid amount");
-    
+
     const baseUrl = window.location.origin + window.location.pathname;
     const link = `${baseUrl}?to=${wallet}&amount=${requestAmount}&token=${requestAsset}`;
     setPaymentLink(link);
@@ -865,7 +984,7 @@ export default function Home() {
 
     const amountNum = Number(sendAmount);
     if (!Number.isFinite(amountNum) || amountNum <= 0) return showMessage("Enter a valid amount greater than 0");
-    
+
     const addresses = (isBatchMode ? sendAddress.split(",") : [sendAddress])
       .map((a) => a.trim())
       .filter((a) => a !== "");
@@ -896,15 +1015,15 @@ export default function Home() {
         );
       }
     }
-    
-    setShowConfirmModal(true); 
+
+    setShowConfirmModal(true);
   };
 
   const executeSend = async () => {
     if (isSending || sendLockRef.current) return;
     sendLockRef.current = true;
     setIsSending(true);
-    
+
     const rawAddresses = isBatchMode ? sendAddress.split(',') : [sendAddress];
     const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
 
@@ -934,15 +1053,15 @@ export default function Home() {
           showMessage(`Resolving ${target}...`);
           const nameOnly = lowerTarget.replace(/\.nex$/, "");
           try {
-             const resolvedAddress = await ansContract.resolve(nameOnly);
-             if (!resolvedAddress || resolvedAddress === ethers.ZeroAddress) {
-                showMessage(`Domain ${target} is not registered.`);
-                setIsSending(false); return;
-             }
-             resolvedAddresses.push(resolvedAddress);
+            const resolvedAddress = await ansContract.resolve(nameOnly);
+            if (!resolvedAddress || resolvedAddress === ethers.ZeroAddress) {
+              showMessage(`Domain ${target} is not registered.`);
+              setIsSending(false); return;
+            }
+            resolvedAddresses.push(resolvedAddress);
           } catch (e) {
-             showMessage(`Domain ${target} could not be resolved.`);
-             setIsSending(false); return;
+            showMessage(`Domain ${target} could not be resolved.`);
+            setIsSending(false); return;
           }
         } else if (ethers.isAddress(target)) {
           resolvedAddresses.push(target);
@@ -1004,7 +1123,7 @@ export default function Home() {
           const displayTarget = addresses[i];
 
           if (i > 0) { showMessage(`Processing transaction ${i + 1} of ${resolvedAddresses.length}...`); await sleep(500); }
-          if (isBatchMode) showMessage(`Transaction ${i+1} of ${resolvedAddresses.length}: Please sign in wallet...`);
+          if (isBatchMode) showMessage(`Transaction ${i + 1} of ${resolvedAddresses.length}: Please sign in wallet...`);
           else showMessage("Confirm transaction in your wallet...");
 
           try {
@@ -1019,7 +1138,7 @@ export default function Home() {
               const finalData = memoBytes ? transferData + memoBytes : transferData;
               tx = await signer.sendTransaction({ to: EURC_ADDRESS, data: finalData });
             }
-            
+
             showMessage(`Broadcasting ${sendAsset} to network...`);
             const receipt = await tx.wait();
             addHistoryRecord(isBatchMode ? `Batch Transfer ${sendAsset}` : `Transfer ${sendAsset}`, `-${sendAmount} ${sendAsset}`, `To ${displayTarget}${sendMemo ? ` (Memo: ${sendMemo})` : ""}`, "Completed", receipt?.hash || "");
@@ -1029,7 +1148,7 @@ export default function Home() {
           }
         }
       }
-      
+
       if (successCount > 0) {
         showMessage(isBatchMode ? `Batch Complete: ${successCount}/${resolvedAddresses.length} sent! 🎉` : `Successfully sent ${sendAmount} ${sendAsset}!`);
         setShowSendModal(false); setSendAddress(""); setSendAmount(""); setSendMemo(""); setIsBatchMode(false);
@@ -1062,52 +1181,52 @@ export default function Home() {
       const ethereum = getEthereum();
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
-      
+
       let tx;
       let receipt;
 
       if (vaultAsset === "USDC") {
-         const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
-         const amountWei = ethers.parseUnits(vaultInput, 18);
-         if (action === "stake" && amountWei > maxNativeSpend(usdcBalanceRaw)) {
-            return showMessage("Insufficient USDC balance (including gas).");
-         }
+        const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
+        const amountWei = ethers.parseUnits(vaultInput, 18);
+        if (action === "stake" && amountWei > maxNativeSpend(usdcBalanceRaw)) {
+          return showMessage("Insufficient USDC balance (including gas).");
+        }
 
-         if (action === "stake") {
-            showMessage("Depositing USDC in progress...");
-            tx = await vaultContract.deposit({ value: amountWei });
-            receipt = await tx.wait();
-            addHistoryRecord("Staked in Vault", `-${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-            showMessage("Staked USDC successfully! 🌱");
-         } else {
-            showMessage("Withdrawing USDC from Vault...");
-            tx = await vaultContract.withdraw(amountWei);
-            receipt = await tx.wait();
-            addHistoryRecord("Withdrew from Vault", `+${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-            showMessage("Withdrawn USDC successfully! 💸");
-         }
+        if (action === "stake") {
+          showMessage("Depositing USDC in progress...");
+          tx = await vaultContract.deposit({ value: amountWei });
+          receipt = await tx.wait();
+          addHistoryRecord("Staked in Vault", `-${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+          showMessage("Staked USDC successfully! 🌱");
+        } else {
+          showMessage("Withdrawing USDC from Vault...");
+          tx = await vaultContract.withdraw(amountWei);
+          receipt = await tx.wait();
+          addHistoryRecord("Withdrew from Vault", `+${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+          showMessage("Withdrawn USDC successfully! 💸");
+        }
       } else {
-         const vaultContract = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, signer);
-         const amountWei = ethers.parseUnits(vaultInput, 6); 
+        const vaultContract = new ethers.Contract(EURC_VAULT_ADDRESS, EURC_VAULT_ABI, signer);
+        const amountWei = ethers.parseUnits(vaultInput, 6);
 
-         if (action === "stake") {
-            const tokenContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
-            await ensureTokenAllowance(tokenContract, wallet, EURC_VAULT_ADDRESS, amountWei, "EURC");
+        if (action === "stake") {
+          const tokenContract = new ethers.Contract(EURC_ADDRESS, ERC20_ABI, signer);
+          await ensureTokenAllowance(tokenContract, wallet, EURC_VAULT_ADDRESS, amountWei, "EURC");
 
-            showMessage("Deposit in progress. Confirm in wallet...");
-            tx = await vaultContract.deposit(amountWei);
-            receipt = await tx.wait();
-            addHistoryRecord("Staked in Vault", `-${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-            showMessage("Staked EURC successfully! 🌱");
-         } else {
-            showMessage("Withdrawing EURC from Vault...");
-            tx = await vaultContract.withdraw(amountWei);
-            receipt = await tx.wait();
-            addHistoryRecord("Withdrew from Vault", `+${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
-            showMessage("Withdrawn EURC successfully! 💸");
-         }
+          showMessage("Deposit in progress. Confirm in wallet...");
+          tx = await vaultContract.deposit(amountWei);
+          receipt = await tx.wait();
+          addHistoryRecord("Staked in Vault", `-${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+          showMessage("Staked EURC successfully! 🌱");
+        } else {
+          showMessage("Withdrawing EURC from Vault...");
+          tx = await vaultContract.withdraw(amountWei);
+          receipt = await tx.wait();
+          addHistoryRecord("Withdrew from Vault", `+${vaultInput} EURC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
+          showMessage("Withdrawn EURC successfully! 💸");
+        }
       }
-      
+
       setVaultInput("");
       invalidatePairCache();
       void fetchBalances(wallet, { force: true });
@@ -1263,7 +1382,7 @@ export default function Home() {
             setLpUsdcInput(formatExact(quotedUsdc, WUSDC_DECIMALS));
           }
         }
-      } catch {}
+      } catch { }
     };
 
     const timer = window.setTimeout(() => { void syncOtherSide(); }, 250);
@@ -1310,7 +1429,7 @@ export default function Home() {
     const isUsdcIn = swapDirection === "USDCtoEURC";
     const amountIn = parseAmount(swapInput, isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS);
     if (!amountIn || amountIn <= BigInt(0)) return showMessage("Enter a valid amount");
-    
+
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
@@ -1527,7 +1646,7 @@ export default function Home() {
   const handleClaimPts = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
     if (unclaimedPts <= 0) return showMessage("No pending NLP to claim");
-    
+
     if (!isArcTestnet) {
       showMessage("Switching to Arc Testnet...");
       const switched = await switchToArcTestnet();
@@ -1536,27 +1655,27 @@ export default function Home() {
 
     setIsVaultLoading(true);
     setVaultAction("claim");
-    
+
     try {
       const ethereum = getEthereum();
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
 
       showMessage("Confirm NLP Claim in your wallet...");
-      
+
       const memoHex = ethers.hexlify(ethers.toUtf8Bytes(`Nexio NLP Claim: ${unclaimedPts.toFixed(2)}`));
       const tx = await signer.sendTransaction({
         to: wallet,
         value: 0,
         data: memoHex
       });
-      
+
       showMessage("Broadcasting Claim to Arc Network...");
       const receipt = await tx.wait();
 
       setClaimedPts(lifetimePts);
       localStorage.setItem(`nexio_claimed_pts_${wallet}`, lifetimePts.toString());
-      
+
       addHistoryRecord("Claimed Nexio NLP", `+${unclaimedPts.toFixed(2)} NLP`, "Loyalty Engagement Record", "Completed", receipt?.hash || "");
       showMessage("NLP Claimed Successfully! 🎯");
       triggerConfetti();
@@ -1608,13 +1727,12 @@ export default function Home() {
     setDomainSearch(cleanSearch);
 
     if (!cleanSearch) return showMessage("Enter a valid domain name");
-    
+
     setIsCheckingDomain(true);
     setDomainAvailable(false);
     try {
-      const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, getArcReadProvider());
-      const available = await ansContract.isAvailable(cleanSearch);
-      
+      const available = await isDomainAvailable(cleanSearch);
+
       if (available) {
         setDomainAvailable(true);
         showMessage("Domain is available! 🚀");
@@ -1630,6 +1748,67 @@ export default function Home() {
     }
   };
 
+  const handleResolveAddress = async (customAddr?: string) => {
+    const rawTarget = (customAddr ?? resolveAddressInput).trim();
+    if (!rawTarget) {
+      showMessage("Please enter an Arc wallet address");
+      return;
+    }
+    if (!ethers.isAddress(rawTarget)) {
+      setResolvedDomainResult(null);
+      setResolvedOwnerAddress(rawTarget);
+      setResolvedAddressError("Invalid EVM wallet address format (must start with 0x and be 42 characters).");
+      setHasSearchedAddress(true);
+      return;
+    }
+
+    setIsResolvingAddress(true);
+    setResolvedAddressError(null);
+    setResolvedDomainResult(null);
+    setResolvedOwnerAddress(rawTarget);
+    setHasSearchedAddress(true);
+
+    try {
+      const domain = await resolveAddressToDomain(rawTarget);
+      if (domain && domain.trim().length > 0) {
+        setResolvedDomainResult(domain);
+        setResolvedAddressError(null);
+        showMessage(`Resolved: ${domain}.nex 🎉`);
+      } else {
+        setResolvedDomainResult(null);
+        setResolvedAddressError("No .nex domain registered for this address on Arc Testnet.");
+      }
+    } catch (error) {
+      console.error("Reverse resolution error:", error);
+      setResolvedDomainResult(null);
+      setResolvedAddressError("No .nex domain registered for this address on Arc Testnet.");
+    } finally {
+      setIsResolvingAddress(false);
+    }
+  };
+
+  const handlePasteResolveAddress = async () => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          const trimmed = text.trim();
+          setResolveAddressInput(trimmed);
+          void handleResolveAddress(trimmed);
+        }
+      }
+    } catch {
+      showMessage("Could not access clipboard");
+    }
+  };
+
+  const copyResolvedText = (text: string, label = "Address") => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      showMessage(`${label} copied to clipboard! 📋`);
+    }
+  };
+
   const triggerConfetti = () => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js";
@@ -1638,7 +1817,7 @@ export default function Home() {
       const animationEnd = Date.now() + duration;
       const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 100000 };
       const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
-      const interval: any = setInterval(function() {
+      const interval: any = setInterval(function () {
         const timeLeft = animationEnd - Date.now();
         if (timeLeft <= 0) return clearInterval(interval);
         const particleCount = 50 * (timeLeft / duration);
@@ -1665,13 +1844,13 @@ export default function Home() {
       const signer = await provider.getSigner();
 
       const ansContract = new ethers.Contract(ANS_CONTRACT_ADDRESS, ANS_ABI, signer);
-      
+
       const cleanName = sanitizeDomainName(domainSearch);
       if (!cleanName) return showMessage("Enter a valid domain name");
       setDomainSearch(cleanName);
 
       showMessage("Confirm Registration in Wallet...");
-      
+
       const tx = await ansContract.register(cleanName);
 
       showMessage("Registering domain on Arc Network...");
@@ -1680,11 +1859,11 @@ export default function Home() {
       const newDomain = `${cleanName}.nex`;
       setRegisteredDomain(newDomain);
       setRegistrationHash(receipt?.hash || "");
-      
+
       localStorage.setItem(`nexio_domain_name_${wallet}`, newDomain);
 
       addHistoryRecord("Nexio Domain Registration", "Free", newDomain, "Completed", receipt?.hash || "");
-      
+
       setShowDomainSuccess(true);
       triggerConfetti();
 
@@ -1788,7 +1967,7 @@ export default function Home() {
 
   return (
     <div className={`min-h-screen relative font-sans flex flex-col selection:bg-cyan-500/30 transition-colors duration-500 overflow-x-hidden ${tc.bgApp}`}>
-      
+
       {message && (
         <div className="fixed top-8 left-1/2 z-[100] -translate-x-1/2 rounded-full border border-white/10 bg-[#0A1A3F]/90 backdrop-blur-xl px-4 py-3 sm:px-8 sm:py-4 shadow-[0_0_40px_rgba(6,182,212,0.2)] transition-all duration-500 animate-in fade-in slide-in-from-top-4">
           <div className="font-bold text-xs sm:text-sm tracking-wide text-white whitespace-nowrap">{message}</div>
@@ -1813,7 +1992,7 @@ export default function Home() {
               <span className="bg-white/10 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wider text-gray-300">Forever</span>
             </div>
             <div className="w-full rounded-2xl border border-white/5 bg-black/50 p-5 flex justify-between items-center mb-2">
-              <span className="text-xs font-medium text-gray-400">Tx Hash: <span className="text-white ml-1">{registrationHash.slice(0,6)}...{registrationHash.slice(-4)}</span></span>
+              <span className="text-xs font-medium text-gray-400">Tx Hash: <span className="text-white ml-1">{registrationHash.slice(0, 6)}...{registrationHash.slice(-4)}</span></span>
               <button onClick={() => window.open(`${ARC_EXPLORER}/tx/${registrationHash}`, "_blank")} className="bg-white/10 hover:bg-white/20 transition px-4 py-1.5 rounded-lg text-xs font-bold text-white flex items-center gap-1">Explorer ↗</button>
             </div>
           </div>
@@ -1827,19 +2006,19 @@ export default function Home() {
               <h3 className={`text-2xl font-black tracking-tight ${theme === 'dark' ? 'text-white' : 'text-slate-900'}`}>Receive Funds</h3>
               <button onClick={() => setShowReceiveModal(false)} className="text-gray-400 hover:text-cyan-500 transition rounded-full p-2.5">✕</button>
             </div>
-            
+
             <div className="flex flex-col items-center justify-center space-y-6">
               <div className="bg-white p-3 rounded-3xl shadow-xl border border-gray-200">
                 <img src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${wallet}&color=0A1A3F`} alt="Wallet QR Code" className="w-48 h-48 rounded-2xl" />
               </div>
-              
+
               <div className="text-center w-full">
                 <p className={`text-xs font-bold uppercase tracking-widest mb-3 ${tc.textMuted}`}>Your Wallet Address</p>
                 <div className={`text-sm font-mono break-all p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/50 border-white/10 text-cyan-400' : 'bg-slate-50 border-slate-200 text-cyan-700'}`}>
                   {wallet}
                 </div>
               </div>
-              
+
               <button onClick={copyAddress} className="w-full rounded-2xl bg-cyan-500 text-white hover:bg-cyan-400 py-4 font-black text-lg transition-all active:scale-95 flex items-center justify-center gap-2 shadow-xl">
                 <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                 Copy Address
@@ -1882,16 +2061,16 @@ export default function Home() {
                 <div className="mt-4 p-5 rounded-3xl border border-cyan-500/30 bg-cyan-500/10 flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2">
                   <div className="flex flex-col sm:flex-row items-center gap-4">
                     <div className="bg-white p-2 rounded-xl shadow-lg shrink-0 pointer-events-none">
-                       <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentLink)}&color=0A1A3F`} alt="Payment Link QR" className="w-20 h-20 rounded-lg" />
+                      <img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(paymentLink)}&color=0A1A3F`} alt="Payment Link QR" className="w-20 h-20 rounded-lg" />
                     </div>
                     <div className="flex flex-col w-full text-center sm:text-left">
-                       <div className="text-xs font-bold text-cyan-500 uppercase tracking-widest mb-1">Scan or Share Link</div>
-                       <div className="text-[10px] sm:text-xs font-mono break-all text-gray-300 bg-black/50 p-2.5 rounded-xl border border-white/5">
-                         {paymentLink}
-                       </div>
+                      <div className="text-xs font-bold text-cyan-500 uppercase tracking-widest mb-1">Scan or Share Link</div>
+                      <div className="text-[10px] sm:text-xs font-mono break-all text-gray-300 bg-black/50 p-2.5 rounded-xl border border-white/5">
+                        {paymentLink}
+                      </div>
                     </div>
                   </div>
-                  
+
                   <button onClick={copyPaymentLink} className="w-full rounded-xl bg-white text-black hover:bg-gray-200 py-3 font-black transition-all active:scale-95 flex items-center justify-center gap-2 mt-1">
                     <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                     Copy Payment Link
@@ -1979,11 +2158,10 @@ export default function Home() {
                     <button
                       type="button"
                       onClick={() => setIsScanning((prev) => !prev)}
-                      className={`normal-case tracking-wide text-[10px] font-black px-2.5 py-1 rounded-lg border transition-all ${
-                        isScanning
-                          ? (theme === "dark" ? "border-cyan-400 bg-cyan-500/20 text-cyan-300" : "border-cyan-500 bg-cyan-100 text-cyan-700")
-                          : (theme === "dark" ? "border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10" : "border-cyan-300 text-cyan-600 hover:bg-cyan-50")
-                      }`}
+                      className={`normal-case tracking-wide text-[10px] font-black px-2.5 py-1 rounded-lg border transition-all ${isScanning
+                        ? (theme === "dark" ? "border-cyan-400 bg-cyan-500/20 text-cyan-300" : "border-cyan-500 bg-cyan-100 text-cyan-700")
+                        : (theme === "dark" ? "border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10" : "border-cyan-300 text-cyan-600 hover:bg-cyan-50")
+                        }`}
                     >
                       {isScanning ? "Close" : "Scan QR"}
                     </button>
@@ -2012,7 +2190,23 @@ export default function Home() {
                 {isBatchMode ? (
                   <textarea value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="0x1..., jubayir.nex, 0x3..." className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm resize-none h-24 ${tc.inputBg}`} />
                 ) : (
-                  <input type="text" value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="e.g., 0x... or jubayir.nex" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm ${tc.inputBg}`} />
+                  <div>
+                    <input type="text" value={sendAddress} onChange={(e) => setSendAddress(e.target.value)} placeholder="e.g., 0x... or jubayir.nex" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition font-mono text-sm ${tc.inputBg}`} />
+                    {isResolvingRecipient && (
+                      <div className="mt-1.5 px-3 py-1 rounded-xl text-xs font-bold text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 flex items-center gap-2 animate-pulse">
+                        <span>🔄</span> Resolving on-chain identity...
+                      </div>
+                    )}
+                    {!isResolvingRecipient && resolvedRecipientDomain && (
+                      <div className="mt-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-cyan-300 bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <span>🛡️</span>
+                          <span>Verified Arc Domain: <strong className="text-white font-black">{resolvedRecipientDomain}</strong></span>
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wider text-cyan-400 font-mono">ANS Verified</span>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
               <div>
@@ -2029,7 +2223,7 @@ export default function Home() {
                 </label>
                 <input type="number" value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} placeholder="0.00" className={`w-full rounded-2xl border px-5 py-4 focus:outline-none transition text-2xl font-black ${tc.inputBg}`} />
               </div>
-              
+
               <div>
                 <label className={`text-xs font-bold mb-2 flex justify-between uppercase tracking-widest ${tc.historyText}`}>
                   <span>Tx Memo</span>
@@ -2054,7 +2248,7 @@ export default function Home() {
             <span className={`text-xl font-black ${tc.textMain}`}>Menu</span>
             <button onClick={() => setIsSidebarOpen(false)} className={`p-2 rounded-full transition-colors ${theme === 'dark' ? 'bg-white/5 hover:bg-white/10 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-900'}`}>✕</button>
           </div>
-          
+
           <button onClick={() => handleTabSwitch("overview")} className={`w-full rounded-2xl px-6 py-4 text-left font-black tracking-wide transition-all border ${selectedTab === "overview" ? tc.sidebarActive : tc.sidebarInactive}`}>
             Dashboard
           </button>
@@ -2093,14 +2287,14 @@ export default function Home() {
           </button>
 
           <div className="mt-auto pt-6 border-t border-white/5 space-y-2">
-             {wallet && (
-               <button onClick={() => { setIsSidebarOpen(false); disconnectWallet(); }} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border ${theme === 'dark' ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white' : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-500 hover:text-white'}`}>
-                  Disconnect Wallet
-               </button>
-             )}
-             <button onClick={toggleTheme} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border flex items-center justify-center gap-2 ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-yellow-400' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-indigo-900'}`}>
-                {theme === 'dark' ? '☀️ Switch to Light Mode' : '🌙 Switch to Dark Mode'}
-             </button>
+            {wallet && (
+              <button onClick={() => { setIsSidebarOpen(false); disconnectWallet(); }} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border ${theme === 'dark' ? 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white' : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-500 hover:text-white'}`}>
+                Disconnect Wallet
+              </button>
+            )}
+            <button onClick={toggleTheme} className={`w-full rounded-2xl px-6 py-4 font-black tracking-wide transition-all border flex items-center justify-center gap-2 ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-yellow-400' : 'border-slate-200 bg-slate-50 hover:bg-slate-100 text-indigo-900'}`}>
+              {theme === 'dark' ? '☀️ Switch to Light Mode' : '🌙 Switch to Dark Mode'}
+            </button>
           </div>
         </div>
       </div>
@@ -2109,7 +2303,7 @@ export default function Home() {
       <nav className={`flex flex-wrap items-center justify-between gap-4 px-4 py-4 md:px-10 md:py-6 sticky top-0 z-40 backdrop-blur-xl border-b transition-colors duration-500 ${tc.navBorder}`}>
         <div className="flex items-center gap-3 md:gap-5">
           <h1 className={`text-xl sm:text-2xl md:text-3xl font-black tracking-tighter drop-shadow-md ${tc.textMain}`}>Nexio</h1>
-          
+
           {wallet && (
             <div className={`hidden sm:flex items-center gap-2 rounded-full border px-3 py-1.5 backdrop-blur-md ${theme === 'dark' ? 'border-white/5 bg-black/30' : 'border-slate-200 bg-white shadow-sm'}`}>
               <div className={`w-2 h-2 rounded-full pointer-events-none ${isArcTestnet ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-red-500'} animate-pulse`}></div>
@@ -2119,7 +2313,7 @@ export default function Home() {
             </div>
           )}
         </div>
-        
+
         <div className="flex items-center gap-2 md:gap-3">
           {wallet ? (
             <>
@@ -2139,7 +2333,7 @@ export default function Home() {
       {/* MAIN CONTENT */}
       <main className="flex-1 px-4 py-6 md:py-10 md:px-10 flex flex-col items-center">
         <div className="w-full max-w-4xl flex flex-col gap-8 md:gap-10">
-          
+
           <div className="text-center space-y-3 md:space-y-4">
             <h1 className={`text-4xl sm:text-6xl md:text-7xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-br pb-2 drop-shadow-sm ${tc.textWelcome}`}>
               Welcome to Nexio
@@ -2171,7 +2365,7 @@ export default function Home() {
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Send</div>
                     <span className={`text-[8px] mt-1 tracking-widest opacity-0 group-hover:opacity-100 transition-opacity ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>BATCH (v0.7.2)</span>
                   </button>
-                  
+
                   <button onClick={handleOpenRequestModal} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center relative ${tc.actionCard}`}>
                     <div className="absolute top-2 right-2 md:top-4 md:right-4 w-2 h-2 rounded-full bg-cyan-500 animate-pulse pointer-events-none"></div>
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Request</div>
@@ -2179,7 +2373,7 @@ export default function Home() {
                   </button>
 
                   <button onClick={() => {
-                    if(!wallet) return showMessage("Connect wallet first");
+                    if (!wallet) return showMessage("Connect wallet first");
                     setShowReceiveModal(true);
                   }} className={`group rounded-2xl sm:rounded-3xl md:rounded-[2.5rem] p-4 sm:p-6 md:p-8 text-center transition-all md:hover:-translate-y-2 flex flex-col items-center justify-center ${tc.actionCard}`}>
                     <div className="text-sm sm:text-lg md:text-xl font-black group-hover:scale-105 transition-transform tracking-wide">Receive</div>
@@ -2197,7 +2391,7 @@ export default function Home() {
             {/* REAL PORTFOLIO & DEFI TAB CONTENT */}
             {selectedTab === "portfolio" && (
               <div className="w-full max-w-2xl mx-auto space-y-6 md:space-y-8 animate-in fade-in zoom-in-95 duration-500 font-mono">
-                
+
                 {/* 100% Real Portfolio Header */}
                 <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
                   <div className="flex flex-col items-center text-center">
@@ -2212,7 +2406,7 @@ export default function Home() {
                 {/* 100% REAL DEFI VAULT STAKING SECTION */}
                 <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-[0_0_40px_rgba(16,185,129,0.1)] ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-emerald-950/30 border-emerald-500/30' : 'bg-gradient-to-br from-emerald-50 to-white border-emerald-200'}`}>
                   <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🌱</div>
-                  
+
                   <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 ${tc.textMuted}`}>
                     <span>Nexio DeFi Vault</span>
                     <div className="flex gap-2 p-1 rounded-lg bg-black/20 border border-white/5 relative z-10">
@@ -2222,44 +2416,44 @@ export default function Home() {
                   </div>
 
                   <div className="flex flex-col mb-8 gap-1 relative z-10">
-                     <div className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Your Staked Balance</div>
-                     <div className={`text-4xl md:text-5xl font-black tracking-tighter ${vaultAsset === "USDC" ? (theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600') : (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600')}`}>
-                       {vaultAsset === "USDC" ? usdcStakedBalance : eurcStakedBalance} <span className="text-xl md:text-2xl text-gray-500">{vaultAsset}</span>
-                     </div>
+                    <div className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Your Staked Balance</div>
+                    <div className={`text-4xl md:text-5xl font-black tracking-tighter ${vaultAsset === "USDC" ? (theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600') : (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600')}`}>
+                      {vaultAsset === "USDC" ? usdcStakedBalance : eurcStakedBalance} <span className="text-xl md:text-2xl text-gray-500">{vaultAsset}</span>
+                    </div>
                   </div>
 
                   <div className="flex flex-col sm:flex-row items-center gap-3 mt-2 relative z-10">
-                     <div className="relative w-full">
-                       <input
-                         type="number"
-                         value={vaultInput}
-                         onChange={(e) => setVaultInput(e.target.value)}
-                         placeholder="0.00"
-                         className={`w-full rounded-xl border px-4 py-3 focus:outline-none transition font-bold text-lg ${tc.inputBg}`}
-                       />
-                       <button 
-                         onClick={() => setVaultInput(vaultAsset === "USDC" ? formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS) : formatExact(eurcBalanceRaw, EURC_DECIMALS))}
-                         className={`absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}
-                       >
-                         Max
-                       </button>
-                     </div>
-                     <div className="flex gap-2 w-full sm:w-auto">
-                       <button
-                         onClick={() => handleVaultAction("stake")}
-                         disabled={isVaultLoading || !vaultInput}
-                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all shadow-md text-white flex justify-center items-center gap-2 disabled:opacity-50 ${vaultAsset === "USDC" ? 'bg-cyan-500 hover:bg-cyan-400' : 'bg-emerald-500 hover:bg-emerald-400'} active:scale-95`}
-                       >
-                         {isVaultLoading && vaultAction === 'stake' ? '...' : 'Stake'}
-                       </button>
-                       <button
-                         onClick={() => handleVaultAction("withdraw")}
-                         disabled={isVaultLoading || !vaultInput}
-                         className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all border shadow-sm flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50 ${vaultAsset === "USDC" ? (theme === 'dark' ? 'bg-transparent border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10' : 'bg-white border-cyan-300 text-cyan-700 hover:bg-cyan-50') : (theme === 'dark' ? 'bg-transparent border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10' : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50')}`}
-                       >
-                         {isVaultLoading && vaultAction === 'withdraw' ? '...' : 'Withdraw'}
-                       </button>
-                     </div>
+                    <div className="relative w-full">
+                      <input
+                        type="number"
+                        value={vaultInput}
+                        onChange={(e) => setVaultInput(e.target.value)}
+                        placeholder="0.00"
+                        className={`w-full rounded-xl border px-4 py-3 focus:outline-none transition font-bold text-lg ${tc.inputBg}`}
+                      />
+                      <button
+                        onClick={() => setVaultInput(vaultAsset === "USDC" ? formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS) : formatExact(eurcBalanceRaw, EURC_DECIMALS))}
+                        className={`absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}
+                      >
+                        Max
+                      </button>
+                    </div>
+                    <div className="flex gap-2 w-full sm:w-auto">
+                      <button
+                        onClick={() => handleVaultAction("stake")}
+                        disabled={isVaultLoading || !vaultInput}
+                        className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all shadow-md text-white flex justify-center items-center gap-2 disabled:opacity-50 ${vaultAsset === "USDC" ? 'bg-cyan-500 hover:bg-cyan-400' : 'bg-emerald-500 hover:bg-emerald-400'} active:scale-95`}
+                      >
+                        {isVaultLoading && vaultAction === 'stake' ? '...' : 'Stake'}
+                      </button>
+                      <button
+                        onClick={() => handleVaultAction("withdraw")}
+                        disabled={isVaultLoading || !vaultInput}
+                        className={`flex-1 sm:flex-none px-6 py-3 rounded-xl font-black text-base transition-all border shadow-sm flex justify-center items-center gap-2 active:scale-95 disabled:opacity-50 ${vaultAsset === "USDC" ? (theme === 'dark' ? 'bg-transparent border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/10' : 'bg-white border-cyan-300 text-cyan-700 hover:bg-cyan-50') : (theme === 'dark' ? 'bg-transparent border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10' : 'bg-white border-emerald-300 text-emerald-700 hover:bg-emerald-50')}`}
+                      >
+                        {isVaultLoading && vaultAction === 'withdraw' ? '...' : 'Withdraw'}
+                      </button>
+                    </div>
                   </div>
                   <div className={`text-[10px] mt-4 text-center font-bold ${tc.textMuted}`}>Contract: {vaultAsset === "USDC" ? USDC_VAULT_ADDRESS : EURC_VAULT_ADDRESS}</div>
                 </div>
@@ -2267,40 +2461,40 @@ export default function Home() {
                 {/* REAL NEXIO LOYALTY POINTS (PTS) SECTION */}
                 <div className={`rounded-3xl md:rounded-[2rem] border p-6 md:p-8 relative overflow-hidden transition-all shadow-xl ${theme === 'dark' ? 'bg-gradient-to-br from-[#0A1A3F] to-indigo-950/40 border-indigo-500/30' : 'bg-gradient-to-br from-indigo-50 to-white border-indigo-200'}`}>
                   <div className={`absolute top-4 right-4 p-3 text-5xl md:text-6xl pointer-events-none ${theme === 'dark' ? 'opacity-10' : 'opacity-[0.05]'}`}>🎯</div>
-                  
+
                   <div className="mb-6 max-w-[80%] relative z-10">
-                     <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (NLP)</h3>
-                     <p className={`text-xs md:text-sm font-medium leading-relaxed ${tc.textMuted}`}>
-                        Track your ecosystem engagement. NLP reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
-                     </p>
+                    <h3 className={`text-xl md:text-2xl font-black tracking-tight mb-2 ${theme === 'dark' ? 'text-indigo-400' : 'text-indigo-700'}`}>Nexio Loyalty Points (NLP)</h3>
+                    <p className={`text-xs md:text-sm font-medium leading-relaxed ${tc.textMuted}`}>
+                      Track your ecosystem engagement. NLP reflects your active participation in the Nexio protocol and helps build your on-chain reputation.
+                    </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-black/20 p-5 rounded-2xl border border-white/5 relative z-10">
-                     <div className="flex flex-col gap-4 w-full">
-                        <div className="flex justify-between items-center">
-                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime NLP</span>
-                           <span className={`text-xl font-black ${tc.textMain}`}>{lifetimePts.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between items-center border-t border-white/10 pt-4">
-                           <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Unclaimed NLP</span>
-                           <span className={`text-2xl font-black text-indigo-400 animate-pulse`}>+ {unclaimedPts.toFixed(2)}</span>
-                        </div>
-                     </div>
+                    <div className="flex flex-col gap-4 w-full">
+                      <div className="flex justify-between items-center">
+                        <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Total Lifetime NLP</span>
+                        <span className={`text-xl font-black ${tc.textMain}`}>{lifetimePts.toFixed(2)}</span>
+                      </div>
+                      <div className="flex justify-between items-center border-t border-white/10 pt-4">
+                        <span className={`text-xs font-bold uppercase tracking-widest ${tc.textMuted}`}>Unclaimed NLP</span>
+                        <span className={`text-2xl font-black text-indigo-400 animate-pulse`}>+ {unclaimedPts.toFixed(2)}</span>
+                      </div>
+                    </div>
 
-                     <button 
-                        onClick={handleClaimPts}
-                        disabled={isVaultLoading || unclaimedPts <= 0}
-                        className={`w-full sm:w-auto px-6 py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] disabled:opacity-50 disabled:shadow-none active:scale-95 ${theme === 'dark' ? 'bg-indigo-500 hover:bg-indigo-400 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
-                     >
-                        {isVaultLoading && vaultAction === 'claim' ? 'Claiming...' : 'Claim NLP'}
-                     </button>
+                    <button
+                      onClick={handleClaimPts}
+                      disabled={isVaultLoading || unclaimedPts <= 0}
+                      className={`w-full sm:w-auto px-6 py-4 rounded-xl font-black text-sm uppercase tracking-widest transition-all shadow-[0_0_20px_rgba(99,102,241,0.3)] disabled:opacity-50 disabled:shadow-none active:scale-95 ${theme === 'dark' ? 'bg-indigo-500 hover:bg-indigo-400 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+                    >
+                      {isVaultLoading && vaultAction === 'claim' ? 'Claiming...' : 'Claim NLP'}
+                    </button>
                   </div>
                 </div>
 
                 {/* 100% Real Assets List */}
                 <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
                   <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Your Assets</span>
-                  
+
                   <div className="space-y-4">
                     {/* USDC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
@@ -2325,7 +2519,7 @@ export default function Home() {
                         <div className={`text-xs font-medium mt-1 ${tc.textMuted}`}>${uStakedValue.toFixed(2)}</div>
                       </div>
                     </div>
-                    
+
                     {/* EURC */}
                     <div className="flex justify-between items-center pb-4 border-b border-gray-500/20">
                       <div className="flex items-center gap-4">
@@ -2367,7 +2561,7 @@ export default function Home() {
                 {/* 100% Real Asset Allocation Bar */}
                 <div className={`p-8 md:p-10 rounded-[2rem] border transition-all duration-500 ${tc.solidCardBg}`}>
                   <span className={`text-sm font-bold tracking-widest uppercase mb-6 block ${tc.textMuted}`}>Asset Allocation (Inc. Staked)</span>
-                  
+
                   <div className="w-full">
                     <div className={`w-full h-4 md:h-6 rounded-full overflow-hidden flex border shadow-inner mb-5 ${theme === 'dark' ? 'bg-black/50 border-white/5' : 'bg-gray-200 border-gray-300'}`}>
                       <div className="h-full bg-cyan-500 transition-all duration-1000" style={{ width: `${usdcPercent}%` }}></div>
@@ -2391,249 +2585,249 @@ export default function Home() {
 
             {selectedTab === "swap" && (
               <div className="w-full max-w-lg mx-auto animate-in fade-in zoom-in-95 mt-2 md:mt-6">
-                 <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
-                    <div className="flex items-start justify-between gap-3 mb-6 relative z-10">
-                       <div>
-                          <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Swap</h2>
-                          <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · 18-dec WUSDC</p>
-                       </div>
-                       <button
-                         onClick={() => setShowSlippage((v) => !v)}
-                         className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
-                       >
-                         Slip {slippageLabel(slippageBps)}
-                       </button>
+                <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
+                  <div className="flex items-start justify-between gap-3 mb-6 relative z-10">
+                    <div>
+                      <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Swap</h2>
+                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · 18-dec WUSDC</p>
                     </div>
+                    <button
+                      onClick={() => setShowSlippage((v) => !v)}
+                      className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
+                    >
+                      Slip {slippageLabel(slippageBps)}
+                    </button>
+                  </div>
 
-                    {showSlippage && (
-                      <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                         <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
-                         <div className="flex flex-wrap gap-2">
-                            {SLIPPAGE_PRESETS.map((bps) => (
-                              <button key={bps} onClick={() => { setSlippageBps(bps); setCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${slippageBps === bps && !customSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
-                                {slippageLabel(bps)}
-                              </button>
-                            ))}
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              value={customSlippage}
-                              onChange={(e) => { setCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setSlippageBps); }}
-                              placeholder="Custom %"
-                              className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
-                            />
-                         </div>
+                  {showSlippage && (
+                    <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
+                      <div className="flex flex-wrap gap-2">
+                        {SLIPPAGE_PRESETS.map((bps) => (
+                          <button key={bps} onClick={() => { setSlippageBps(bps); setCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${slippageBps === bps && !customSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
+                            {slippageLabel(bps)}
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          value={customSlippage}
+                          onChange={(e) => { setCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setSlippageBps); }}
+                          placeholder="Custom %"
+                          className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
+                        />
                       </div>
-                    )}
+                    </div>
+                  )}
 
-                    <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
-                       <button onClick={() => setSwapDirection("USDCtoEURC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "USDCtoEURC" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>USDC → EURC</button>
-                       <button onClick={() => setSwapDirection("EURCtoUSDC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "EURCtoUSDC" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>EURC → USDC</button>
+                  <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
+                    <button onClick={() => setSwapDirection("USDCtoEURC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "USDCtoEURC" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>USDC → EURC</button>
+                    <button onClick={() => setSwapDirection("EURCtoUSDC")} className={`flex-1 py-3 rounded-xl font-black text-xs sm:text-sm tracking-wide transition-all ${swapDirection === "EURCtoUSDC" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>EURC → USDC</button>
+                  </div>
+
+                  <div className="space-y-3 relative z-10">
+                    <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="flex justify-between items-center mb-2">
+                        <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>You Pay</span>
+                        <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapDirection === "USDCtoEURC" ? swapUsdcLabel : swapEurcLabel}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="text" inputMode="decimal" value={swapInput} onChange={(e) => setSwapInput(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent border-none outline-none font-black text-2xl sm:text-3xl ${tc.textMain}`} />
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-sm font-black ${tc.textMain}`}>{swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}</span>
+                          <button onClick={fillSwapMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30">Max</button>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="space-y-3 relative z-10">
-                       <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                         <div className="flex justify-between items-center mb-2">
-                           <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>You Pay</span>
-                           <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapDirection === "USDCtoEURC" ? swapUsdcLabel : swapEurcLabel}</span>
-                         </div>
-                         <div className="flex items-center gap-2">
-                           <input type="text" inputMode="decimal" value={swapInput} onChange={(e) => setSwapInput(e.target.value.replace(/[^\d.]/g, ""))} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent border-none outline-none font-black text-2xl sm:text-3xl ${tc.textMain}`} />
-                           <div className="flex items-center gap-2 shrink-0">
-                             <span className={`text-sm font-black ${tc.textMain}`}>{swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}</span>
-                             <button onClick={fillSwapMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30">Max</button>
-                           </div>
-                         </div>
-                       </div>
-
-                       <div className="flex justify-center -my-1 relative z-10">
-                         <div className={`w-9 h-9 rounded-full border flex items-center justify-center text-sm ${theme === 'dark' ? 'bg-[#0A1A3F] border-white/10' : 'bg-white border-slate-200'}`}>↓</div>
-                       </div>
-
-                       <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                         <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${tc.textMuted}`}>You Receive</div>
-                         <div className="flex items-end justify-between gap-2">
-                           <div className={`font-black text-2xl sm:text-3xl break-all ${tc.textMain}`}>
-                             {swapQuote || "0.00"}
-                           </div>
-                           <span className="text-sm font-black text-gray-500 shrink-0">{swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}</span>
-                         </div>
-                         {swapQuoteRaw > BigInt(0) && (
-                           <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>
-                             Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinOut, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
-                           </div>
-                         )}
-                         {swapQuoteError && <div className="text-[10px] font-bold mt-2 text-red-400">{swapQuoteError}</div>}
-                       </div>
-
-                       <button
-                         onClick={!wallet ? connectWallet : handleSwap}
-                         disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient)}
-                         className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}
-                       >
-                         {!wallet
-                           ? "Connect Wallet"
-                           : isSwapping
-                             ? (swapStatus === "approving" ? "Approving EURC..." : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
-                             : swapInsufficient
-                               ? "Insufficient Balance"
-                               : "Swap"}
-                       </button>
+                    <div className="flex justify-center -my-1 relative z-10">
+                      <div className={`w-9 h-9 rounded-full border flex items-center justify-center text-sm ${theme === 'dark' ? 'bg-[#0A1A3F] border-white/10' : 'bg-white border-slate-200'}`}>↓</div>
                     </div>
-                    
-                    <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>Router {ROUTER_ADDRESS.slice(0,6)}...{ROUTER_ADDRESS.slice(-4)}</div>
-                 </div>
+
+                    <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${tc.textMuted}`}>You Receive</div>
+                      <div className="flex items-end justify-between gap-2">
+                        <div className={`font-black text-2xl sm:text-3xl break-all ${tc.textMain}`}>
+                          {swapQuote || "0.00"}
+                        </div>
+                        <span className="text-sm font-black text-gray-500 shrink-0">{swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}</span>
+                      </div>
+                      {swapQuoteRaw > BigInt(0) && (
+                        <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>
+                          Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinOut, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
+                        </div>
+                      )}
+                      {swapQuoteError && <div className="text-[10px] font-bold mt-2 text-red-400">{swapQuoteError}</div>}
+                    </div>
+
+                    <button
+                      onClick={!wallet ? connectWallet : handleSwap}
+                      disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient)}
+                      className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}
+                    >
+                      {!wallet
+                        ? "Connect Wallet"
+                        : isSwapping
+                          ? (swapStatus === "approving" ? "Approving EURC..." : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
+                          : swapInsufficient
+                            ? "Insufficient Balance"
+                            : "Swap"}
+                    </button>
+                  </div>
+
+                  <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>Router {ROUTER_ADDRESS.slice(0, 6)}...{ROUTER_ADDRESS.slice(-4)}</div>
+                </div>
               </div>
             )}
 
             {selectedTab === "lp" && (
               <div className="w-full max-w-lg mx-auto animate-in fade-in zoom-in-95 mt-2 md:mt-6">
-                 <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
-                    <div className="flex items-start justify-between gap-3 mb-5 relative z-10">
-                       <div>
-                          <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Liquidity</h2>
-                          <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC Pool</p>
-                       </div>
-                       <button
-                         onClick={() => setShowLpSlippage((v) => !v)}
-                         className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
-                       >
-                         Slip {slippageLabel(lpSlippageBps)}
-                       </button>
+                <div className={`p-5 sm:p-8 rounded-[1.75rem] sm:rounded-[2rem] border shadow-2xl relative overflow-hidden ${tc.solidCardBg}`}>
+                  <div className="flex items-start justify-between gap-3 mb-5 relative z-10">
+                    <div>
+                      <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Liquidity</h2>
+                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC Pool</p>
                     </div>
+                    <button
+                      onClick={() => setShowLpSlippage((v) => !v)}
+                      className={`shrink-0 rounded-full px-3 py-1.5 text-[10px] font-black uppercase tracking-widest border transition ${theme === 'dark' ? 'bg-white/5 border-white/10 hover:bg-white/10' : 'bg-slate-100 border-slate-200 hover:bg-slate-200'}`}
+                    >
+                      Slip {slippageLabel(lpSlippageBps)}
+                    </button>
+                  </div>
 
-                    {showLpSlippage && (
-                      <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                         <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
-                         <div className="flex flex-wrap gap-2">
-                            {SLIPPAGE_PRESETS.map((bps) => (
-                              <button key={bps} onClick={() => { setLpSlippageBps(bps); setLpCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${lpSlippageBps === bps && !lpCustomSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
-                                {slippageLabel(bps)}
-                              </button>
-                            ))}
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              value={lpCustomSlippage}
-                              onChange={(e) => { setLpCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setLpSlippageBps); }}
-                              placeholder="Custom %"
-                              className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
-                            />
-                         </div>
+                  {showLpSlippage && (
+                    <div className={`mb-5 p-3 rounded-2xl border relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className={`text-[10px] font-black uppercase tracking-widest mb-2 ${tc.textMuted}`}>Max slippage</div>
+                      <div className="flex flex-wrap gap-2">
+                        {SLIPPAGE_PRESETS.map((bps) => (
+                          <button key={bps} onClick={() => { setLpSlippageBps(bps); setLpCustomSlippage(""); }} className={`px-3 py-1.5 rounded-xl text-xs font-black ${lpSlippageBps === bps && !lpCustomSlippage ? "bg-cyan-500 text-white" : "bg-white/10 text-gray-400 hover:bg-white/20"}`}>
+                            {slippageLabel(bps)}
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          value={lpCustomSlippage}
+                          onChange={(e) => { setLpCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setLpSlippageBps); }}
+                          placeholder="Custom %"
+                          className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
+                        />
                       </div>
-                    )}
-
-                    <div className={`p-4 rounded-2xl border mb-5 relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                       <div className={`text-[10px] font-black uppercase tracking-widest mb-3 ${tc.textMuted}`}>Your Position</div>
-                       <div className="grid grid-cols-2 gap-3">
-                          <div>
-                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>LP Tokens</div>
-                             <div className={`text-base sm:text-lg font-black break-all ${tc.textMain}`}>{!balancesReady && balancesLoading ? "..." : lpBalance}</div>
-                          </div>
-                          <div className="text-right">
-                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pool Share</div>
-                             <div className={`text-base sm:text-lg font-black ${tc.textMain}`}>{lpSharePct}%</div>
-                          </div>
-                          <div>
-                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled USDC</div>
-                             <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledUsdc}</div>
-                          </div>
-                          <div className="text-right">
-                             <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled EURC</div>
-                             <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledEurc}</div>
-                          </div>
-                       </div>
-                       <div className={`flex justify-between mt-3 pt-3 border-t text-[10px] font-bold ${theme === 'dark' ? 'border-white/5' : 'border-slate-200'} ${tc.textMuted}`}>
-                          <span>Wallet WUSDC</span>
-                          <span className={tc.textMain}>{formatPretty(wusdcBalanceRaw, WUSDC_DECIMALS, 6)}</span>
-                       </div>
                     </div>
+                  )}
 
-                    <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
-                       <button onClick={() => setLpMode("add")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "add" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Add</button>
-                       <button onClick={() => setLpMode("remove")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "remove" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Remove</button>
-                    </div>
-
-                    {lpMode === "add" ? (
-                      <div className="space-y-3 relative z-10">
-                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                           <div className="flex justify-between mb-2">
-                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC</span>
-                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapUsdcLabel}</span>
-                           </div>
-                           <div className="flex items-center gap-2">
-                             <input type="text" inputMode="decimal" value={lpUsdcInput} onChange={(e) => { setLpLastEdited("usdc"); setLpUsdcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
-                             <button onClick={fillLpUsdcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 shrink-0">Max</button>
-                           </div>
-                         </div>
-                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                           <div className="flex justify-between mb-2">
-                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>EURC</span>
-                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapEurcLabel}</span>
-                           </div>
-                           <div className="flex items-center gap-2">
-                             <input type="text" inputMode="decimal" value={lpEurcInput} onChange={(e) => { setLpLastEdited("eurc"); setLpEurcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
-                             <button onClick={fillLpEurcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
-                           </div>
-                         </div>
-                         <div className={`text-[10px] font-bold text-center ${tc.textMuted}`}>
-                           Pool {poolReserveUsdc} USDC / {poolReserveEurc} EURC · Min {slippageLabel(lpSlippageBps)}
-                         </div>
-                         <button
-                           onClick={!wallet ? connectWallet : handleAddLiquidity}
-                           disabled={!!wallet && (isLpLoading || !parseAmount(lpUsdcInput, WUSDC_DECIMALS) || !parseAmount(lpEurcInput, EURC_DECIMALS))}
-                           className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-cyan-500 hover:bg-cyan-400 text-white"
-                         >
-                           {!wallet
-                             ? "Connect Wallet"
-                             : isLpLoading
-                               ? (lpAction === "approve" ? "Approving EURC..." : "Adding Liquidity...")
-                               : ((parseAmount(lpUsdcInput, WUSDC_DECIMALS) ?? BigInt(0)) > usdcBalanceRaw || (parseAmount(lpEurcInput, EURC_DECIMALS) ?? BigInt(0)) > eurcBalanceRaw
-                                   ? "Insufficient Balance"
-                                   : "Add Liquidity")}
-                         </button>
+                  <div className={`p-4 rounded-2xl border mb-5 relative z-10 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                    <div className={`text-[10px] font-black uppercase tracking-widest mb-3 ${tc.textMuted}`}>Your Position</div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>LP Tokens</div>
+                        <div className={`text-base sm:text-lg font-black break-all ${tc.textMain}`}>{!balancesReady && balancesLoading ? "..." : lpBalance}</div>
                       </div>
-                    ) : (
-                      <div className="space-y-3 relative z-10">
-                         <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                           <div className="flex justify-between mb-2">
-                             <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>LP to remove</span>
-                             <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {lpBalance}</span>
-                           </div>
-                           <div className="flex items-center gap-2">
-                             <input type="text" inputMode="decimal" value={lpRemoveInput} onChange={(e) => { setLpRemoveIsMax(false); setLpRemoveInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
-                             <button onClick={fillLpRemoveMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
-                           </div>
-                         </div>
-                         <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
-                           <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You receive (est.)</div>
-                           <div className={`text-base font-black ${tc.textMain}`}>{lpRemovePreviewUsdc || "0.00"} <span className="text-sm text-gray-500">USDC</span></div>
-                           <div className={`text-base font-black mt-1 ${tc.textMain}`}>{lpRemovePreviewEurc || "0.00"} <span className="text-sm text-gray-500">EURC</span></div>
-                           {lpRemovePreviewUsdc && (
-                             <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>Mins use {slippageLabel(lpSlippageBps)} slippage</div>
-                           )}
-                         </div>
-                         <button
-                           onClick={!wallet ? connectWallet : handleRemoveLiquidity}
-                           disabled={!!wallet && (isLpLoading || (!lpRemoveIsMax && !parseAmount(lpRemoveInput, LP_DECIMALS)))}
-                           className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-emerald-500 hover:bg-emerald-400 text-white"
-                         >
-                           {!wallet
-                             ? "Connect Wallet"
-                             : isLpLoading
-                               ? (lpAction === "approve" ? "Approving LP..." : "Removing Liquidity...")
-                               : ((!lpRemoveIsMax && (parseAmount(lpRemoveInput, LP_DECIMALS) ?? BigInt(0)) > lpBalanceRaw)
-                                   ? "Insufficient LP Balance"
-                                   : "Remove Liquidity")}
-                         </button>
+                      <div className="text-right">
+                        <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pool Share</div>
+                        <div className={`text-base sm:text-lg font-black ${tc.textMain}`}>{lpSharePct}%</div>
                       </div>
-                    )}
-
-                    <div className={`text-[10px] mt-5 text-center font-bold tracking-widest space-y-1 ${tc.textMuted}`}>
-                       <div>Router {ROUTER_ADDRESS.slice(0,6)}...{ROUTER_ADDRESS.slice(-4)}</div>
-                       <div>Factory {FACTORY_ADDRESS.slice(0,6)}...{FACTORY_ADDRESS.slice(-4)}</div>
+                      <div>
+                        <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled USDC</div>
+                        <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledUsdc}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className={`text-[10px] font-bold uppercase ${tc.textMuted}`}>Pooled EURC</div>
+                        <div className={`text-sm font-black break-all ${tc.textMain}`}>{lpPooledEurc}</div>
+                      </div>
                     </div>
-                 </div>
+                    <div className={`flex justify-between mt-3 pt-3 border-t text-[10px] font-bold ${theme === 'dark' ? 'border-white/5' : 'border-slate-200'} ${tc.textMuted}`}>
+                      <span>Wallet WUSDC</span>
+                      <span className={tc.textMain}>{formatPretty(wusdcBalanceRaw, WUSDC_DECIMALS, 6)}</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-black/20 p-1 rounded-2xl flex gap-1 mb-5 border border-white/5 relative z-10">
+                    <button onClick={() => setLpMode("add")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "add" ? "bg-cyan-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Add</button>
+                    <button onClick={() => setLpMode("remove")} className={`flex-1 py-3 rounded-xl font-black text-sm tracking-wide transition-all ${lpMode === "remove" ? "bg-emerald-500 text-white shadow-lg" : "text-gray-500 hover:bg-white/10"}`}>Remove</button>
+                  </div>
+
+                  {lpMode === "add" ? (
+                    <div className="space-y-3 relative z-10">
+                      <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className="flex justify-between mb-2">
+                          <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC</span>
+                          <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapUsdcLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input type="text" inputMode="decimal" value={lpUsdcInput} onChange={(e) => { setLpLastEdited("usdc"); setLpUsdcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                          <button onClick={fillLpUsdcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30 shrink-0">Max</button>
+                        </div>
+                      </div>
+                      <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className="flex justify-between mb-2">
+                          <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>EURC</span>
+                          <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {swapEurcLabel}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input type="text" inputMode="decimal" value={lpEurcInput} onChange={(e) => { setLpLastEdited("eurc"); setLpEurcInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                          <button onClick={fillLpEurcMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
+                        </div>
+                      </div>
+                      <div className={`text-[10px] font-bold text-center ${tc.textMuted}`}>
+                        Pool {poolReserveUsdc} USDC / {poolReserveEurc} EURC · Min {slippageLabel(lpSlippageBps)}
+                      </div>
+                      <button
+                        onClick={!wallet ? connectWallet : handleAddLiquidity}
+                        disabled={!!wallet && (isLpLoading || !parseAmount(lpUsdcInput, WUSDC_DECIMALS) || !parseAmount(lpEurcInput, EURC_DECIMALS))}
+                        className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-cyan-500 hover:bg-cyan-400 text-white"
+                      >
+                        {!wallet
+                          ? "Connect Wallet"
+                          : isLpLoading
+                            ? (lpAction === "approve" ? "Approving EURC..." : "Adding Liquidity...")
+                            : ((parseAmount(lpUsdcInput, WUSDC_DECIMALS) ?? BigInt(0)) > usdcBalanceRaw || (parseAmount(lpEurcInput, EURC_DECIMALS) ?? BigInt(0)) > eurcBalanceRaw
+                              ? "Insufficient Balance"
+                              : "Add Liquidity")}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 relative z-10">
+                      <div className={`rounded-2xl border p-4 ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className="flex justify-between mb-2">
+                          <span className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}>LP to remove</span>
+                          <span className={`text-[10px] font-bold ${tc.textMuted}`}>Bal {lpBalance}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input type="text" inputMode="decimal" value={lpRemoveInput} onChange={(e) => { setLpRemoveIsMax(false); setLpRemoveInput(e.target.value.replace(/[^\d.]/g, "")); }} placeholder="0.00" className={`flex-1 min-w-0 bg-transparent outline-none font-black text-xl sm:text-2xl ${tc.textMain}`} />
+                          <button onClick={fillLpRemoveMax} className="px-2.5 py-1 text-[10px] font-black uppercase rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 shrink-0">Max</button>
+                        </div>
+                      </div>
+                      <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                        <div className={`text-[10px] font-bold uppercase mb-2 tracking-widest ${tc.textMuted}`}>You receive (est.)</div>
+                        <div className={`text-base font-black ${tc.textMain}`}>{lpRemovePreviewUsdc || "0.00"} <span className="text-sm text-gray-500">USDC</span></div>
+                        <div className={`text-base font-black mt-1 ${tc.textMain}`}>{lpRemovePreviewEurc || "0.00"} <span className="text-sm text-gray-500">EURC</span></div>
+                        {lpRemovePreviewUsdc && (
+                          <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>Mins use {slippageLabel(lpSlippageBps)} slippage</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={!wallet ? connectWallet : handleRemoveLiquidity}
+                        disabled={!!wallet && (isLpLoading || (!lpRemoveIsMax && !parseAmount(lpRemoveInput, LP_DECIMALS)))}
+                        className="w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 bg-emerald-500 hover:bg-emerald-400 text-white"
+                      >
+                        {!wallet
+                          ? "Connect Wallet"
+                          : isLpLoading
+                            ? (lpAction === "approve" ? "Approving LP..." : "Removing Liquidity...")
+                            : ((!lpRemoveIsMax && (parseAmount(lpRemoveInput, LP_DECIMALS) ?? BigInt(0)) > lpBalanceRaw)
+                              ? "Insufficient LP Balance"
+                              : "Remove Liquidity")}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className={`text-[10px] mt-5 text-center font-bold tracking-widest space-y-1 ${tc.textMuted}`}>
+                    <div>Router {ROUTER_ADDRESS.slice(0, 6)}...{ROUTER_ADDRESS.slice(-4)}</div>
+                    <div>Factory {FACTORY_ADDRESS.slice(0, 6)}...{FACTORY_ADDRESS.slice(-4)}</div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2641,28 +2835,27 @@ export default function Home() {
               <div className="w-full flex items-center justify-center animate-in fade-in zoom-in-95 duration-500 mt-4 md:mt-10">
                 <div className={`w-full max-w-2xl rounded-3xl md:rounded-[3rem] border p-8 md:p-14 shadow-2xl flex flex-col items-center text-center relative overflow-hidden group gap-6 md:gap-8 ${theme === 'dark' ? 'border-orange-500/20 bg-gradient-to-br from-orange-500/10 to-black backdrop-blur-2xl text-white' : 'border-orange-200 bg-gradient-to-br from-orange-50 to-white text-slate-900'}`}>
                   <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 p-4 opacity-5 text-[15rem] md:text-[20rem] group-hover:rotate-12 transition-transform duration-1000 pointer-events-none">☀️</div>
-                  
+
                   <div className="flex flex-col items-center z-10">
-                     <div className="text-6xl md:text-7xl mb-4 animate-bounce pointer-events-none">{hasCheckedInToday ? "🔥" : "⏳"}</div>
-                     <h3 className="text-3xl md:text-4xl font-black mb-3 tracking-tight">Daily GM Protocol</h3>
-                     <p className={`text-sm md:text-base font-medium max-w-md ${theme === 'dark' ? 'text-gray-400' : 'text-slate-500'}`}>Establish your presence on the Arc L1 Network. Execute a zero-value smart contract transaction to build your immutable on-chain streak!</p>
+                    <div className="text-6xl md:text-7xl mb-4 animate-bounce pointer-events-none">{hasCheckedInToday ? "🔥" : "⏳"}</div>
+                    <h3 className="text-3xl md:text-4xl font-black mb-3 tracking-tight">Daily GM Protocol</h3>
+                    <p className={`text-sm md:text-base font-medium max-w-md ${theme === 'dark' ? 'text-gray-400' : 'text-slate-500'}`}>Establish your presence on the Arc L1 Network. Execute a zero-value smart contract transaction to build your immutable on-chain streak!</p>
                   </div>
-                  
+
                   <div className="flex flex-col w-full items-center gap-4 z-10 mt-4">
-                     <div className={`text-xl md:text-2xl font-black uppercase tracking-widest px-8 py-3 rounded-full border shadow-inner ${theme === 'dark' ? 'bg-orange-500/10 text-orange-400 border-orange-500/30' : 'bg-orange-100 text-orange-600 border-orange-300'}`}>
-                        {streak > 0 ? `Current Streak: ${streak} Days` : "No Streak Yet"}
-                     </div>
-                     <button 
-                        onClick={executeDailyGM}
-                        disabled={isCheckingIn || hasCheckedInToday || !wallet}
-                        className={`w-full max-w-sm rounded-2xl py-4 md:py-5 font-black text-lg md:text-xl transition-all duration-300 shadow-2xl mt-4 ${
-                           hasCheckedInToday 
-                              ? (theme === 'dark' ? "bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed" : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed") 
-                              : (theme === 'dark' ? "bg-white text-black hover:bg-gray-200 active:scale-95 shadow-[0_0_30px_rgba(255,255,255,0.2)] animate-pulse hover:animate-none" : "bg-slate-900 text-white hover:bg-slate-800 active:scale-95 shadow-md animate-pulse hover:animate-none")
+                    <div className={`text-xl md:text-2xl font-black uppercase tracking-widest px-8 py-3 rounded-full border shadow-inner ${theme === 'dark' ? 'bg-orange-500/10 text-orange-400 border-orange-500/30' : 'bg-orange-100 text-orange-600 border-orange-300'}`}>
+                      {streak > 0 ? `Current Streak: ${streak} Days` : "No Streak Yet"}
+                    </div>
+                    <button
+                      onClick={executeDailyGM}
+                      disabled={isCheckingIn || hasCheckedInToday || !wallet}
+                      className={`w-full max-w-sm rounded-2xl py-4 md:py-5 font-black text-lg md:text-xl transition-all duration-300 shadow-2xl mt-4 ${hasCheckedInToday
+                        ? (theme === 'dark' ? "bg-white/5 text-gray-500 border border-white/10 cursor-not-allowed" : "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed")
+                        : (theme === 'dark' ? "bg-white text-black hover:bg-gray-200 active:scale-95 shadow-[0_0_30px_rgba(255,255,255,0.2)] animate-pulse hover:animate-none" : "bg-slate-900 text-white hover:bg-slate-800 active:scale-95 shadow-md animate-pulse hover:animate-none")
                         }`}
-                     >
-                        {isCheckingIn ? "Signing Transaction..." : hasCheckedInToday ? `Next GM in: ${timeLeft}` : "Say GM (Check-in)"}
-                     </button>
+                    >
+                      {isCheckingIn ? "Signing Transaction..." : hasCheckedInToday ? `Next GM in: ${timeLeft}` : "Say GM (Check-in)"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2671,49 +2864,354 @@ export default function Home() {
             {selectedTab === "domains" && (
               <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-10 relative overflow-hidden animate-in fade-in zoom-in-95 duration-500 ${theme === 'dark' ? 'border border-cyan-500/20 bg-gradient-to-br from-[#0A1A3F]/60 to-black backdrop-blur-3xl shadow-2xl' : 'border border-cyan-200 bg-gradient-to-br from-cyan-50 to-white shadow-xl'}`}>
                 <div className={`absolute top-0 right-0 p-6 md:p-10 text-7xl md:text-9xl pointer-events-none ${theme === 'dark' ? 'opacity-5' : 'opacity-[0.03]'}`}>🌐</div>
-                <h2 className={`text-2xl md:text-4xl font-black tracking-tight mb-2 md:mb-3 ${tc.textMain}`}>Nexio Web3 Identity</h2>
-                <p className={`text-xs md:text-base font-medium mb-6 md:mb-10 max-w-xl ${tc.textMuted}`}>Register your unique <span className={theme === 'dark' ? 'text-cyan-400 font-bold' : 'text-cyan-600 font-bold'}>.nex</span> username on the blockchain and establish your lifetime identity.</p>
-                
-                <div className={`flex flex-col sm:flex-row items-center gap-3 md:gap-4 w-full bg-black border rounded-3xl sm:rounded-full p-2 pl-4 md:pl-6 transition-shadow relative z-10 ${theme === 'dark' ? 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:shadow-[0_0_40px_rgba(6,182,212,0.2)]' : 'border-cyan-300 shadow-md hover:shadow-lg'}`}>
-                  <span className={`hidden sm:inline-block text-xl font-bold ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>∞</span>
-                  <input 
-                    type="text" 
-                    value={domainSearch}
-                    onChange={(e) => { 
-                      setDomainSearch(sanitizeDomainName(e.target.value)); 
-                      setDomainAvailable(false); 
-                    }}
-                    placeholder="Search a name (e.g. jubayir69)" 
-                    className={`flex-1 w-full bg-transparent border-none text-lg md:text-xl font-bold focus:outline-none text-center sm:text-left py-2 sm:py-0 ${theme === 'dark' ? 'text-white placeholder-zinc-700' : 'text-slate-900 placeholder-slate-400'}`}
-                  />
-                  <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                    <div className={`font-black px-3 py-1.5 md:px-4 md:py-2 rounded-full border tracking-widest text-sm md:text-base ${theme === 'dark' ? 'bg-white/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-100 text-cyan-700 border-cyan-200'}`}>.nex</div>
-                    <button onClick={handleSearchDomain} disabled={isCheckingDomain} className="bg-cyan-500 hover:bg-cyan-400 text-white font-black px-6 py-2 md:px-8 md:py-4 rounded-full transition-all active:scale-95 text-sm md:text-lg w-full sm:w-auto shadow-md disabled:opacity-50">
-                      {isCheckingDomain ? "Checking..." : "Search →"}
-                    </button>
-                  </div>
-                </div>
 
-                {domainAvailable && (
-                  <div className={`mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-between p-5 md:p-6 rounded-3xl animate-in fade-in slide-in-from-bottom-4 duration-500 relative z-10 ${theme === 'dark' ? 'bg-cyan-950/30 border border-cyan-500/30' : 'bg-cyan-50 border border-cyan-200'}`}>
-                    <div className="flex items-center gap-4 md:gap-5">
-                      <div className={`w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center p-1.5 ${theme === 'dark' ? 'bg-[#050B14] border border-cyan-500/20 shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-white border border-cyan-200 shadow-sm'}`}>
-                        <img src="/nexio-logo.png" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-lg md:rounded-xl" />
+                <div className="relative z-10">
+                  {/* Tab Header & Switcher */}
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6 mb-8">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-2">
+                        <span className={`text-[10px] md:text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full border ${theme === 'dark' ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-400' : 'border-cyan-200 bg-cyan-100 text-cyan-700'}`}>
+                          Arc Name Service (ANS)
+                        </span>
+                        <a
+                          href={`${ARC_EXPLORER}/address/${ANS_CONTRACT_ADDRESS}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={`text-[10px] font-mono hover:underline flex items-center gap-1 ${tc.textMuted}`}
+                        >
+                          <span>{ANS_CONTRACT_ADDRESS.slice(0, 6)}...{ANS_CONTRACT_ADDRESS.slice(-4)}</span>
+                          <span>↗</span>
+                        </a>
                       </div>
-                      <div className={`text-xl md:text-2xl font-black ${tc.textMain}`}>{domainSearch}.nex</div>
+                      <h2 className={`text-2xl md:text-4xl font-black tracking-tight mb-2 ${tc.textMain}`}>Nexio Web3 Identity</h2>
+                      <p className={`text-xs md:text-base font-medium max-w-xl ${tc.textMuted}`}>
+                        On-chain domain registry and reverse resolution engine built on Arc L1 Network.
+                      </p>
                     </div>
-                    <div className="flex items-center gap-4 md:gap-6 mt-4 sm:mt-0 w-full sm:w-auto justify-between sm:justify-end">
-                      <div className={`text-sm md:text-base font-bold ${theme === 'dark' ? 'text-gray-300' : 'text-slate-600'}`}>Free (Gas Only)</div>
-                      <button 
-                        onClick={executeRegisterDomain} 
-                        disabled={isRegistering}
-                        className={`font-black px-6 py-2.5 md:px-8 md:py-3.5 rounded-full transition-all active:scale-95 text-sm md:text-lg w-full sm:w-auto ${theme === 'dark' ? 'bg-cyan-400 hover:bg-cyan-300 disabled:bg-zinc-800 disabled:text-zinc-500 text-black shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 disabled:text-slate-500 text-white shadow-md'}`}
+
+                    {/* Sub-tab Switcher */}
+                    <div className={`flex items-center p-1.5 rounded-2xl border self-start md:self-center shrink-0 ${theme === 'dark' ? 'bg-black/60 border-cyan-500/20 shadow-inner' : 'bg-slate-100 border-slate-200 shadow-inner'}`}>
+                      <button
+                        type="button"
+                        onClick={() => setDomainSubTab("register")}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-black transition-all ${domainSubTab === "register"
+                          ? (theme === 'dark' ? 'bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'bg-cyan-500 text-white shadow-md')
+                          : (theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+                          }`}
                       >
-                        {isRegistering ? "Registering..." : "Register Now"}
+                        <span>🔍 Register / Search</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDomainSubTab("reverse")}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs md:text-sm font-black transition-all ${domainSubTab === "reverse"
+                          ? (theme === 'dark' ? 'bg-cyan-500 text-white shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'bg-cyan-500 text-white shadow-md')
+                          : (theme === 'dark' ? 'text-gray-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+                          }`}
+                      >
+                        <span>🔄 Resolve by Address</span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-black ${domainSubTab === "reverse" ? 'bg-white/20 text-white' : (theme === 'dark' ? 'bg-cyan-500/20 text-cyan-400' : 'bg-cyan-200 text-cyan-800')}`}>NEW</span>
                       </button>
                     </div>
                   </div>
-                )}
+
+                  {/* Connected Domain Banner if present */}
+                  {wallet && registeredDomain && passVerified && (
+                    <div className={`mb-6 p-4 rounded-2xl border flex flex-col sm:flex-row items-center justify-between gap-3 ${theme === 'dark' ? 'bg-cyan-950/20 border-cyan-500/30' : 'bg-cyan-50/80 border-cyan-200'}`}>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xl">🛡️</span>
+                        <div>
+                          <div className={`text-[10px] font-black uppercase tracking-widest ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-700'}`}>Connected Wallet Identity</div>
+                          <div className={`text-base md:text-lg font-black ${tc.textMain}`}>{registeredDomain}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleTabSwitch("trustpass")}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${theme === 'dark' ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20' : 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'}`}
+                        >
+                          View Nexio Pass 🪪
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 1: REGISTER & SEARCH */}
+                  {domainSubTab === "register" && (
+                    <div className="space-y-6">
+                      <div className={`flex flex-col sm:flex-row items-center gap-3 md:gap-4 w-full bg-black border rounded-3xl sm:rounded-full p-2 pl-4 md:pl-6 transition-shadow relative z-10 ${theme === 'dark' ? 'border-cyan-500/30 shadow-[0_0_30px_rgba(6,182,212,0.1)] hover:shadow-[0_0_40px_rgba(6,182,212,0.2)]' : 'border-cyan-300 shadow-md hover:shadow-lg'}`}>
+                        <span className={`hidden sm:inline-block text-xl font-bold ${theme === 'dark' ? 'text-cyan-500' : 'text-cyan-600'}`}>∞</span>
+                        <input
+                          type="text"
+                          value={domainSearch}
+                          onChange={(e) => {
+                            setDomainSearch(sanitizeDomainName(e.target.value));
+                            setDomainAvailable(false);
+                          }}
+                          placeholder="Search a name (e.g. jubayir69)"
+                          className={`flex-1 w-full bg-transparent border-none text-lg md:text-xl font-bold focus:outline-none text-center sm:text-left py-2 sm:py-0 ${theme === 'dark' ? 'text-white placeholder-zinc-700' : 'text-slate-900 placeholder-slate-400'}`}
+                        />
+                        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                          <div className={`font-black px-3 py-1.5 md:px-4 md:py-2 rounded-full border tracking-widest text-sm md:text-base ${theme === 'dark' ? 'bg-white/10 text-cyan-400 border-cyan-500/20' : 'bg-cyan-100 text-cyan-700 border-cyan-200'}`}>.nex</div>
+                          <button onClick={handleSearchDomain} disabled={isCheckingDomain} className="bg-cyan-500 hover:bg-cyan-400 text-white font-black px-6 py-2 md:px-8 md:py-4 rounded-full transition-all active:scale-95 text-sm md:text-lg w-full sm:w-auto shadow-md disabled:opacity-50">
+                            {isCheckingDomain ? "Checking..." : "Search →"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {domainAvailable && (
+                        <div className={`mt-6 md:mt-8 flex flex-col sm:flex-row items-center justify-between p-5 md:p-6 rounded-3xl animate-in fade-in slide-in-from-bottom-4 duration-500 relative z-10 ${theme === 'dark' ? 'bg-cyan-950/30 border border-cyan-500/30' : 'bg-cyan-50 border border-cyan-200'}`}>
+                          <div className="flex items-center gap-4 md:gap-5">
+                            <div className={`w-10 h-10 md:w-14 md:h-14 rounded-xl md:rounded-2xl flex items-center justify-center p-1.5 ${theme === 'dark' ? 'bg-[#050B14] border border-cyan-500/20 shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-white border border-cyan-200 shadow-sm'}`}>
+                              <img src="/nexio-logo.png" alt="Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-lg md:rounded-xl" />
+                            </div>
+                            <div className={`text-xl md:text-2xl font-black ${tc.textMain}`}>{domainSearch}.nex</div>
+                          </div>
+                          <div className="flex items-center gap-4 md:gap-6 mt-4 sm:mt-0 w-full sm:w-auto justify-between sm:justify-end">
+                            <div className={`text-sm md:text-base font-bold ${theme === 'dark' ? 'text-gray-300' : 'text-slate-600'}`}>Free (Gas Only)</div>
+                            <button
+                              onClick={executeRegisterDomain}
+                              disabled={isRegistering}
+                              className={`font-black px-6 py-2.5 md:px-8 md:py-3.5 rounded-full transition-all active:scale-95 text-sm md:text-lg w-full sm:w-auto ${theme === 'dark' ? 'bg-cyan-400 hover:bg-cyan-300 disabled:bg-zinc-800 disabled:text-zinc-500 text-black shadow-[0_0_20px_rgba(6,182,212,0.3)]' : 'bg-cyan-500 hover:bg-cyan-600 disabled:bg-slate-300 disabled:text-slate-500 text-white shadow-md'}`}
+                            >
+                              {isRegistering ? "Registering..." : "Register Now"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* SUB-TAB 2: RESOLVE BY ADDRESS (REVERSE RESOLUTION) */}
+                  {domainSubTab === "reverse" && (
+                    <div className="space-y-6">
+                      <div className={`p-6 rounded-3xl border ${theme === 'dark' ? 'bg-black/40 border-cyan-500/20' : 'bg-white border-slate-200 shadow-sm'}`}>
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                          <div>
+                            <h3 className={`text-lg font-black ${tc.textMain}`}>Query Address → .nex Domain</h3>
+                            <p className={`text-xs ${tc.textMuted}`}>Enter any EVM address on Arc Testnet to reverse-resolve its on-chain domain.</p>
+                          </div>
+
+                          {/* Quick fill buttons */}
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {wallet && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setResolveAddressInput(wallet);
+                                  void handleResolveAddress(wallet);
+                                }}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${theme === 'dark'
+                                  ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                                  : 'border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100'
+                                  }`}
+                              >
+                                👤 My Address ({wallet.slice(0, 6)}...{wallet.slice(-4)})
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={handlePasteResolveAddress}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${theme === 'dark'
+                                ? 'border-white/10 bg-white/5 text-gray-300 hover:bg-white/10'
+                                : 'border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                                }`}
+                            >
+                              📋 Paste
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Address Input Bar */}
+                        <div className={`flex flex-col sm:flex-row items-center gap-2 p-2 rounded-2xl border ${theme === 'dark' ? 'bg-black border-cyan-500/30' : 'bg-slate-50 border-slate-300'}`}>
+                          <input
+                            type="text"
+                            value={resolveAddressInput}
+                            onChange={(e) => {
+                              setResolveAddressInput(e.target.value.trim());
+                              setResolvedDomainResult(null);
+                              setResolvedAddressError(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void handleResolveAddress();
+                            }}
+                            placeholder="e.g. 0x19c27c2a8729e8A326dF24EF740832b09A607fD0"
+                            className={`flex-1 w-full bg-transparent border-none text-sm md:text-base font-mono font-bold focus:outline-none px-3 py-2 ${theme === 'dark' ? 'text-white placeholder-zinc-700' : 'text-slate-900 placeholder-slate-400'}`}
+                          />
+                          {resolveAddressInput && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setResolveAddressInput("");
+                                setResolvedDomainResult(null);
+                                setResolvedAddressError(null);
+                                setHasSearchedAddress(false);
+                              }}
+                              className="px-2 text-xs font-bold text-gray-500 hover:text-white"
+                            >
+                              ✕
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleResolveAddress()}
+                            disabled={isResolvingAddress || !resolveAddressInput}
+                            className="bg-cyan-500 hover:bg-cyan-400 text-white font-black px-6 py-2.5 rounded-xl transition-all active:scale-95 text-sm md:text-base w-full sm:w-auto shadow-md disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
+                          >
+                            {isResolvingAddress ? (
+                              <>
+                                <span className="animate-spin text-sm">⏳</span>
+                                <span>Resolving...</span>
+                              </>
+                            ) : (
+                              <span>Resolve Address →</span>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* RESOLUTION RESULTS */}
+                      {resolvedDomainResult && resolvedOwnerAddress && (
+                        <div className={`p-6 md:p-8 rounded-3xl border animate-in fade-in slide-in-from-bottom-4 duration-500 relative overflow-hidden ${theme === 'dark'
+                          ? 'border-cyan-500/40 bg-gradient-to-br from-cyan-950/40 via-black to-blue-950/20 shadow-[0_0_50px_rgba(6,182,212,0.15)]'
+                          : 'border-cyan-300 bg-gradient-to-br from-cyan-50 to-white shadow-xl'
+                          }`}>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-cyan-500/20">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)] animate-pulse"></span>
+                              <span className={`text-xs font-black uppercase tracking-widest ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-700'}`}>
+                                Verified On-Chain Domain
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                              Arc Name Service (ANS)
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-6">
+                            <div className="flex items-center gap-4 md:gap-5">
+                              <div className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center p-2 shrink-0 ${theme === 'dark' ? 'bg-[#050B14] border border-cyan-500/30 shadow-[0_0_25px_rgba(6,182,212,0.3)]' : 'bg-white border border-cyan-200 shadow-md'}`}>
+                                <img src="/nexio-logo.png" alt="Nexio Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-xl" />
+                              </div>
+                              <div>
+                                <div className={`text-2xl sm:text-4xl md:text-5xl font-black tracking-tight ${theme === 'dark' ? 'text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-sky-300 to-blue-400 drop-shadow-sm' : 'text-cyan-600'}`}>
+                                  {resolvedDomainResult}.nex
+                                </div>
+                                <div className={`text-xs font-bold mt-1 ${tc.textMuted}`}>
+                                  Registered on Arc L1 Network
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Quick send & copy actions */}
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSendAddress(resolvedOwnerAddress);
+                                  setShowSendModal(true);
+                                }}
+                                className="px-5 py-3 rounded-2xl bg-cyan-500 hover:bg-cyan-400 text-white font-black text-xs sm:text-sm transition-all active:scale-95 shadow-lg flex items-center gap-1.5"
+                              >
+                                <span>💸</span>
+                                <span>Send Crypto</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => copyResolvedText(`${resolvedDomainResult}.nex`, "Domain")}
+                                className={`px-4 py-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all active:scale-95 ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-white' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-800'
+                                  }`}
+                              >
+                                📋 Copy Name
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Address Details Bar */}
+                          <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${theme === 'dark' ? 'bg-black/50 border-white/10' : 'bg-white/80 border-slate-200'}`}>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-1">Associated Wallet Address</div>
+                              <div className="font-mono text-xs sm:text-sm font-bold break-all text-cyan-400">
+                                {resolvedOwnerAddress}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => copyResolvedText(resolvedOwnerAddress, "Address")}
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-gray-200' : 'border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-800'
+                                  }`}
+                              >
+                                Copy
+                              </button>
+                              <a
+                                href={`${ARC_EXPLORER}/address/${resolvedOwnerAddress}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1 ${theme === 'dark' ? 'border-white/10 bg-white/5 hover:bg-white/10 text-gray-200' : 'border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-800'
+                                  }`}
+                              >
+                                <span>Explorer</span>
+                                <span>↗</span>
+                              </a>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Not Registered Notice */}
+                      {resolvedAddressError && (
+                        <div className={`p-6 rounded-3xl border animate-in fade-in slide-in-from-bottom-2 ${theme === 'dark' ? 'bg-yellow-500/5 border-yellow-500/30 text-yellow-200' : 'bg-yellow-50 border-yellow-200 text-yellow-900'
+                          }`}>
+                          <div className="flex items-start gap-3">
+                            <span className="text-2xl shrink-0">🔍</span>
+                            <div className="flex-1">
+                              <h4 className="font-black text-sm md:text-base mb-1">No .nex Domain Found</h4>
+                              <p className="text-xs md:text-sm opacity-90 mb-3">{resolvedAddressError}</p>
+                              {resolvedOwnerAddress && wallet && resolvedOwnerAddress.toLowerCase() === wallet.toLowerCase() && (
+                                <button
+                                  type="button"
+                                  onClick={() => setDomainSubTab("register")}
+                                  className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-white font-black text-xs transition-all active:scale-95 shadow-md"
+                                >
+                                  Register a Domain for this Wallet →
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Informational Feature Cards */}
+                      {!hasSearchedAddress && (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                          <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                            <div className="text-xl mb-2">⚡</div>
+                            <div className={`text-xs font-black mb-1 ${tc.textMain}`}>On-Chain Query</div>
+                            <div className={`text-[11px] font-medium leading-relaxed ${tc.textMuted}`}>
+                              Calls the smart contract function <code className="text-[10px] text-cyan-400">resolveByAddress</code> directly on Arc L1.
+                            </div>
+                          </div>
+                          <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                            <div className="text-xl mb-2">🛡️</div>
+                            <div className={`text-xs font-black mb-1 ${tc.textMain}`}>Verify Identity</div>
+                            <div className={`text-[11px] font-medium leading-relaxed ${tc.textMuted}`}>
+                              Verify domain ownership and human-readable tags before executing stablecoin payments.
+                            </div>
+                          </div>
+                          <div className={`p-4 rounded-2xl border ${theme === 'dark' ? 'bg-black/30 border-white/5' : 'bg-slate-50 border-slate-200'}`}>
+                            <div className="text-xl mb-2">💸</div>
+                            <div className={`text-xs font-black mb-1 ${tc.textMain}`}>Instant Payments</div>
+                            <div className={`text-[11px] font-medium leading-relaxed ${tc.textMuted}`}>
+                              Click Send to immediately initiate USDC or EURC transfers to the resolved recipient.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2721,28 +3219,73 @@ export default function Home() {
               <div className={`rounded-3xl md:rounded-[2.5rem] p-6 md:p-10 flex flex-col items-center justify-center min-h-[50vh] md:min-h-[60vh] relative overflow-hidden animate-in fade-in zoom-in-95 duration-500 ${theme === 'dark' ? 'border border-white/10 bg-white/[0.02] backdrop-blur-3xl shadow-2xl' : 'border border-slate-200 bg-white shadow-xl'}`}>
                 {theme === 'dark' && <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 md:w-96 md:h-96 bg-cyan-500/20 rounded-full blur-[80px] md:blur-[100px] pointer-events-none"></div>}
 
-                {!registeredDomain || !passVerified ? (
-                  <div className="text-center z-10 max-w-lg px-4">
+                {isVerifyingPass ? (
+                  <div className="text-center z-10 max-w-lg px-4 flex flex-col items-center animate-in fade-in duration-300">
+                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-3xl border border-cyan-500/40 bg-cyan-500/10 flex items-center justify-center text-3xl md:text-4xl mb-6 shadow-[0_0_40px_rgba(6,182,212,0.25)] animate-pulse">
+                      🔄
+                    </div>
+                    <h2 className={`text-2xl md:text-3xl font-black mb-3 ${tc.textMain}`}>Querying Nexio Pass</h2>
+                    <p className={`text-xs md:text-sm font-medium mb-4 ${tc.textMuted}`}>
+                      Querying on-chain identity with <code className="text-cyan-400 font-mono">resolveByAddress</code> on Arc Name Service CA:
+                    </p>
+                    <div className={`text-[11px] md:text-xs font-mono font-bold px-3 py-1.5 rounded-xl border mb-6 ${theme === 'dark' ? 'bg-black/50 border-cyan-500/30 text-cyan-300' : 'bg-slate-100 border-slate-300 text-cyan-800'}`}>
+                      {ANS_CONTRACT_ADDRESS}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs font-bold text-cyan-400">
+                      <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+                      <span>Fetching reverse resolution...</span>
+                    </div>
+                  </div>
+                ) : !registeredDomain || !passVerified ? (
+                  <div className="text-center z-10 max-w-lg px-4 flex flex-col items-center animate-in fade-in duration-300">
                     <div className="text-5xl md:text-7xl mb-4 md:mb-6 animate-pulse pointer-events-none">🪪</div>
                     <h2 className={`text-2xl md:text-3xl font-black mb-3 md:mb-4 ${tc.textMain}`}>Unlock Your Nexio Pass</h2>
                     <p className={`text-sm md:text-base mb-6 md:mb-8 ${tc.textMuted}`}>
                       {registeredDomain && !passVerified
                         ? "This domain is not verified on-chain for the connected wallet. Register or use a .nex name that resolves to your address."
-                        : "You need to register a .nex domain to generate your exclusive Web3 Holographic Identity Card."}
+                        : "You need a registered .nex domain on Arc Name Service to generate your exclusive Web3 Holographic Identity Card."}
                     </p>
-                    <button onClick={() => handleTabSwitch("domains")} className="bg-cyan-500 hover:bg-cyan-600 text-white font-black px-6 py-3 md:px-8 md:py-4 rounded-full transition-all active:scale-95 shadow-lg text-sm md:text-base">
-                      Register Domain Now
-                    </button>
+
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
+                      {wallet && (
+                        <button
+                          type="button"
+                          onClick={() => void fetchAndVerifyPass(wallet)}
+                          disabled={isVerifyingPass}
+                          className={`w-full sm:w-auto px-6 py-3.5 md:px-7 md:py-4 rounded-full font-black text-xs md:text-sm border transition-all active:scale-95 shadow-md flex items-center justify-center gap-2 ${
+                            theme === 'dark'
+                              ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-[0_0_20px_rgba(6,182,212,0.15)]'
+                              : 'bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border-cyan-200'
+                          }`}
+                        >
+                          <span>🔄</span>
+                          <span>Fetch from Smart Contract</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleTabSwitch("domains")}
+                        className="w-full sm:w-auto bg-cyan-500 hover:bg-cyan-600 text-white font-black px-6 py-3.5 md:px-8 md:py-4 rounded-full transition-all active:scale-95 shadow-lg text-xs md:text-sm"
+                      >
+                        Register Domain Now →
+                      </button>
+                    </div>
+
+                    <div className={`mt-8 text-[11px] font-mono font-semibold ${tc.textMuted}`}>
+                      ANS CA: {ANS_CONTRACT_ADDRESS.slice(0, 6)}...{ANS_CONTRACT_ADDRESS.slice(-4)}
+                    </div>
                   </div>
                 ) : (
-                  <div className="z-10 w-full flex flex-col items-center">
+                  <div className="z-10 w-full flex flex-col items-center animate-in fade-in duration-300">
                     <div className="text-center mb-8 md:mb-10">
                       <h2 className={`text-2xl md:text-3xl font-black tracking-tight ${tc.textMain}`}>Your Digital Identity</h2>
-                      <p className={`text-xs md:text-sm font-bold mt-1 md:mt-2 ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>Verified on Arc Blockchain</p>
+                      <p className={`text-xs md:text-sm font-bold mt-1 md:mt-2 ${theme === 'dark' ? 'text-cyan-400' : 'text-cyan-600'}`}>
+                        Verified on Arc Blockchain (ANS CA: {ANS_CONTRACT_ADDRESS.slice(0, 6)}...{ANS_CONTRACT_ADDRESS.slice(-4)})
+                      </p>
                     </div>
 
                     <div id="nexio-pass-card" className="w-[90%] sm:w-full max-w-[450px] aspect-[1.58/1] rounded-2xl md:rounded-[2rem] border border-white/20 bg-gradient-to-br from-[#0A1A3F] to-cyan-900/40 backdrop-blur-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] md:shadow-[0_20px_50px_rgba(0,0,0,0.5),inset_0_0_0_1px_rgba(255,255,255,0.1)] relative overflow-hidden flex flex-col justify-between p-5 md:p-8 transform transition-transform md:hover:scale-105 md:hover:rotate-1 duration-500 group">
-                      
+
                       <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent translate-x-[-150%] group-hover:translate-x-[150%] transition-transform duration-1000 ease-in-out"></div>
 
                       <div className="flex justify-between items-start w-full relative z-10">
@@ -2762,7 +3305,7 @@ export default function Home() {
                         <div className="text-[8px] md:text-[10px] text-cyan-200/70 font-black uppercase tracking-[0.2em] mb-1">Web3 Identity</div>
                         <div className="text-xl sm:text-2xl md:text-3xl font-black text-white tracking-tight drop-shadow-md truncate">{registeredDomain}</div>
                         <div className="text-xs md:text-sm font-mono text-gray-400 mt-1 md:mt-2 bg-black/30 inline-block px-2 py-0.5 md:px-3 md:py-1 rounded-md md:rounded-lg border border-white/5">
-                          {wallet.slice(0,6)}...{wallet.slice(-4)}
+                          {wallet.slice(0, 6)}...{wallet.slice(-4)}
                         </div>
                       </div>
 
@@ -2781,13 +3324,27 @@ export default function Home() {
                         </div>
                       </div>
                     </div>
-                    
+
                     <div className="mt-8 md:mt-10 flex flex-wrap justify-center gap-3 md:gap-4">
+                      {wallet && (
+                        <button
+                          type="button"
+                          onClick={() => void fetchAndVerifyPass(wallet)}
+                          disabled={isVerifyingPass}
+                          className={`flex items-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-full transition-all font-bold text-xs md:text-sm border active:scale-95 shadow-md ${
+                            theme === 'dark' ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border-cyan-500/30' : 'bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border-cyan-200'
+                          }`}
+                        >
+                          <span>🔄</span>
+                          <span>Re-sync Pass</span>
+                        </button>
+                      )}
+
                       <button onClick={downloadTrustPass} className={`flex items-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-full transition-all font-bold text-xs md:text-sm border active:scale-95 shadow-md ${theme === 'dark' ? 'bg-white/10 hover:bg-white/20 text-white border-white/10' : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'}`}>
                         <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2-2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         Save Image
                       </button>
-                      
+
                       <button onClick={shareOnX} className={`flex items-center gap-2 px-5 py-2.5 md:px-6 md:py-3 rounded-full transition-all font-bold text-xs md:text-sm border active:scale-95 shadow-md ${theme === 'dark' ? 'bg-black hover:bg-zinc-900 text-white border-zinc-800' : 'bg-slate-900 hover:bg-slate-800 text-white border-slate-800'}`}>
                         <svg viewBox="0 0 24 24" fill="currentColor" className="w-3 h-3 md:w-4 md:h-4"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 24.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.008 5.337H5.051z" /></svg>
                         Share on X
@@ -2809,7 +3366,7 @@ export default function Home() {
                     Arc Explorer ↗
                   </button>
                 </div>
-                
+
                 <div className="space-y-3 md:space-y-4">
                   {txHistory.length === 0 ? (
                     <div className="text-center py-10 md:py-20">
@@ -2820,7 +3377,7 @@ export default function Home() {
                     txHistory.map((item) => (
                       <div key={item.id} className={`rounded-xl md:rounded-2xl border p-4 md:p-6 flex flex-col sm:flex-row justify-between sm:items-center gap-4 md:gap-6 transition-all ${tc.historyCard}`}>
                         <div className="flex items-center gap-4 md:gap-6">
-                          <div className={`p-3 md:p-4 rounded-full border ${item.status === "Completed" ? (theme==='dark'?"bg-green-500/10 text-green-400 border-green-500/20":"bg-green-100 text-green-600 border-green-200") : item.status === "Failed" ? (theme==='dark'?"bg-red-500/10 text-red-400 border-red-500/20":"bg-red-100 text-red-600 border-red-200") : (theme==='dark'?"bg-amber-500/10 text-amber-400 border-amber-500/20":"bg-amber-100 text-amber-600 border-amber-200")}`}>
+                          <div className={`p-3 md:p-4 rounded-full border ${item.status === "Completed" ? (theme === 'dark' ? "bg-green-500/10 text-green-400 border-green-500/20" : "bg-green-100 text-green-600 border-green-200") : item.status === "Failed" ? (theme === 'dark' ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-red-100 text-red-600 border-red-200") : (theme === 'dark' ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-amber-100 text-amber-600 border-amber-200")}`}>
                             {item.status === "Completed" ? "✓" : item.status === "Failed" ? "✕" : "⏳"}
                           </div>
                           <div>
@@ -2834,14 +3391,14 @@ export default function Home() {
                             )}
                           </div>
                         </div>
-                        
+
                         <div className="sm:text-right pl-14 md:pl-20 sm:pl-0 flex flex-col items-start sm:items-end">
                           {item.amount && (
-                            <div className={`font-black text-xl md:text-2xl tracking-tighter ${item.amount.startsWith("+") ? (theme==='dark'?'text-emerald-400':'text-emerald-600') : item.amount.startsWith("-") ? tc.textMain : tc.textMuted}`}>
+                            <div className={`font-black text-xl md:text-2xl tracking-tighter ${item.amount.startsWith("+") ? (theme === 'dark' ? 'text-emerald-400' : 'text-emerald-600') : item.amount.startsWith("-") ? tc.textMain : tc.textMuted}`}>
                               {item.amount}
                             </div>
                           )}
-                          <div className={`mt-1.5 md:mt-2 inline-block px-2.5 py-1 md:px-3 rounded-full text-[10px] md:text-xs font-black uppercase tracking-widest ${item.status === "Completed" ? (theme==='dark'?"bg-emerald-500/10 text-emerald-400":"bg-emerald-100 text-emerald-600") : item.status === "Failed" ? (theme==='dark'?"bg-red-500/10 text-red-400":"bg-red-100 text-red-600") : (theme==='dark'?"bg-amber-500/10 text-amber-400":"bg-amber-100 text-amber-600")}`}>
+                          <div className={`mt-1.5 md:mt-2 inline-block px-2.5 py-1 md:px-3 rounded-full text-[10px] md:text-xs font-black uppercase tracking-widest ${item.status === "Completed" ? (theme === 'dark' ? "bg-emerald-500/10 text-emerald-400" : "bg-emerald-100 text-emerald-600") : item.status === "Failed" ? (theme === 'dark' ? "bg-red-500/10 text-red-400" : "bg-red-100 text-red-600") : (theme === 'dark' ? "bg-amber-500/10 text-amber-400" : "bg-amber-100 text-amber-600")}`}>
                             {item.status}
                           </div>
                         </div>
@@ -2922,20 +3479,20 @@ export default function Home() {
           <div className={`text-xs md:text-sm font-bold tracking-widest uppercase text-center md:text-left ${tc.textMuted}`}>
             © 2026 NEXIO · BUILT ON ARC NETWORK
           </div>
-          
+
           <div className="flex flex-col items-center gap-3 md:gap-4 md:items-end">
             <div className={`text-[10px] md:text-xs font-black uppercase tracking-widest ${tc.textMuted}`}>
               BUILT BY <span className={tc.textMain}>JUBAYIR69</span>
             </div>
             <div className="flex gap-3 md:gap-4">
               <a href="https://discordapp.com/users/1209377505442537484" target="_blank" rel="noopener noreferrer" className={`transition-all p-2.5 md:p-3 border rounded-full md:hover:scale-110 flex items-center justify-center ${tc.footerIcon}`}>
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z" /></svg>
               </a>
               <a href="https://github.com/jubayir-hub-69" target="_blank" rel="noopener noreferrer" className={`transition-all p-2.5 md:p-3 border rounded-full md:hover:scale-110 flex items-center justify-center ${tc.footerIcon}`}>
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" /></svg>
               </a>
               <a href="https://www.linkedin.com/in/jubayir-haider-302aab372" target="_blank" rel="noopener noreferrer" className={`transition-all p-2.5 md:p-3 border rounded-full md:hover:scale-110 flex items-center justify-center ${tc.footerIcon}`}>
-                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.848-3.037-1.85 0-2.132 1.445-2.132 2.939v5.667H9.36V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+                <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4 md:w-5 md:h-5"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.848-3.037-1.85 0-2.132 1.445-2.132 2.939v5.667H9.36V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" /></svg>
               </a>
             </div>
           </div>
