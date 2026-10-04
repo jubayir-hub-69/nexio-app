@@ -53,10 +53,15 @@ import {
   USE_ERC20_USDC,
   poolUsdcFromNative,
   maxPoolUsdcSpend,
-  NEXIO_SWAP_ADDRESS,
-  NEXIO_SWAP_ABI,
-  quoteSwap,
+  IS_ARC_MAINNET,
 } from "@/lib/contracts";
+import {
+  assessStableSwap,
+  describeAchswapError,
+  isAbortError,
+  requestAchswapQuote,
+  requestAchswapSwap,
+} from "@/lib/achswap";
 
 const QrScanner = dynamic(
   () => import("@yudiel/react-qr-scanner").then((mod) => mod.Scanner),
@@ -199,10 +204,13 @@ export default function Home() {
   const [swapInput, setSwapInput] = useState("");
   const [swapDirection, setSwapDirection] = useState<"USDCtoEURC" | "EURCtoUSDC">("USDCtoEURC");
   const [isSwapping, setIsSwapping] = useState(false);
-  const [swapStatus, setSwapStatus] = useState<"approving" | "confirm" | "pending" | null>(null);
+  const [swapStatus, setSwapStatus] = useState<"approving" | "routing" | "confirm" | "pending" | null>(null);
   const [swapQuote, setSwapQuote] = useState("");
   const [swapQuoteRaw, setSwapQuoteRaw] = useState<bigint>(BigInt(0));
   const [swapQuoteError, setSwapQuoteError] = useState("");
+  const [swapMinRaw, setSwapMinRaw] = useState<bigint>(BigInt(0));
+  const [swapExecutor, setSwapExecutor] = useState("");
+  const [swapQuoting, setSwapQuoting] = useState(false);
   const [swapImpactBps, setSwapImpactBps] = useState<number | null>(null);
   const [swapLossBps, setSwapLossBps] = useState<number | null>(null);
   const [swapBlockReason, setSwapBlockReason] = useState("");
@@ -1272,10 +1280,10 @@ export default function Home() {
     await approveTx.wait();
   };
 
-  const applyCustomSlippage = (raw: string, setter: (bps: number) => void) => {
+  const applyCustomSlippage = (raw: string, setter: (bps: number) => void, maxBps = 5000) => {
     const n = Number(raw);
     if (!Number.isFinite(n) || n <= 0) return;
-    setter(Math.max(1, Math.min(5000, Math.round(n * 100))));
+    setter(Math.max(1, Math.min(maxBps, Math.round(n * 100))));
   };
 
   const fillSwapMax = () => {
@@ -1308,72 +1316,96 @@ export default function Home() {
       ? swapAmountIn > usdcPoolBalance
       : swapAmountIn > eurcBalanceRaw
   );
-  const swapMinOut = swapQuoteRaw > BigInt(0) ? applySlippage(swapQuoteRaw, slippageBps) : BigInt(0);
   const swapUsdcLabel = formatPretty(usdcPoolBalance, WUSDC_DECIMALS, 6);
   const swapEurcLabel = formatPretty(eurcBalanceRaw, EURC_DECIMALS, 6);
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
+
+    const clearQuote = () => {
+      setSwapQuote("");
+      setSwapQuoteRaw(BigInt(0));
+      setSwapMinRaw(BigInt(0));
+      setSwapExecutor("");
+      setSwapImpactBps(null);
+      setSwapLossBps(null);
+      setSwapBlockReason("");
+    };
 
     const loadQuote = async () => {
       if (!swapInput.trim()) {
         lastSwapQuoteKeyRef.current = "";
-        setSwapQuote("");
-        setSwapQuoteRaw(BigInt(0));
+        setSwapQuoting(false);
         setSwapQuoteError("");
-        setSwapImpactBps(null);
-        setSwapLossBps(null);
-        setSwapBlockReason("");
+        clearQuote();
         return;
       }
 
-      if (isAmountDraft(swapInput)) return;
+      if (isAmountDraft(swapInput)) {
+        setSwapQuoting(false);
+        return;
+      }
 
-      const amountIn = parseAmount(swapInput, swapDirection === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS);
-      if (!amountIn || amountIn <= BigInt(0)) return;
+      const isUsdcIn = swapDirection === "USDCtoEURC";
+      const inDecimals = isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS;
+      const outDecimals = isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS;
+      const amountIn = parseAmount(swapInput, inDecimals);
+      if (!amountIn || amountIn <= BigInt(0)) {
+        setSwapQuoting(false);
+        return;
+      }
 
-      const quoteKey = `${swapDirection}:${amountIn.toString()}`;
-      if (quoteKey === lastSwapQuoteKeyRef.current) return;
+      if (!IS_ARC_MAINNET) {
+        lastSwapQuoteKeyRef.current = "";
+        setSwapQuoting(false);
+        clearQuote();
+        setSwapQuoteError("Achswap routing is available on Arc Mainnet.");
+        return;
+      }
 
+      const quoteKey = `${swapDirection}:${amountIn.toString()}:${slippageBps}`;
+      if (quoteKey === lastSwapQuoteKeyRef.current) {
+        setSwapQuoting(false);
+        return;
+      }
+
+      setSwapQuoteError("");
+      setSwapQuoting(true);
       try {
-        const provider = getArcReadProvider();
-        const isUsdcIn = swapDirection === "USDCtoEURC";
-        if (USE_ERC20_USDC) {
-          const quoted = await quoteSwap(provider, amountIn, isUsdcIn, slippageBps);
-          if (!cancelled) {
-            lastSwapQuoteKeyRef.current = quoteKey;
-            setSwapQuoteRaw(quoted.amountOut);
-            setSwapQuote(formatPretty(quoted.amountOut, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
-            setSwapImpactBps(quoted.priceImpactBps);
-            setSwapLossBps(quoted.valueLossBps);
-            setSwapBlockReason(quoted.reason);
-            setSwapQuoteError("");
-          }
-        } else {
-          const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
-          const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
-          const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
-          const out = amounts[amounts.length - 1];
-          if (!cancelled) {
-            lastSwapQuoteKeyRef.current = quoteKey;
-            setSwapQuoteRaw(out);
-            setSwapQuote(formatPretty(out, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
-            setSwapImpactBps(null);
-            setSwapLossBps(null);
-            setSwapBlockReason("");
-            setSwapQuoteError("");
-          }
-        }
-      } catch {
-        if (!cancelled && lastSwapQuoteKeyRef.current === "") {
-          setSwapQuoteError("No quote. Check pool liquidity.");
-        }
+        const quoted = await requestAchswapQuote({
+          tokenIn: isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS,
+          tokenOut: isUsdcIn ? EURC_ADDRESS : WUSDC_ADDRESS,
+          amountIn,
+          slippageBps,
+          chainId: ARC_CHAIN_ID,
+          signal: controller.signal,
+        });
+        if (cancelled) return;
+        const assessed = assessStableSwap(amountIn, inDecimals, quoted.amountOut, outDecimals, quoted.priceImpactBps);
+        lastSwapQuoteKeyRef.current = quoteKey;
+        setSwapQuoteRaw(quoted.amountOut);
+        setSwapMinRaw(quoted.minAmountOut);
+        setSwapExecutor(quoted.executor);
+        setSwapQuote(formatPretty(quoted.amountOut, outDecimals, isUsdcIn ? 6 : 8));
+        setSwapImpactBps(quoted.priceImpactBps);
+        setSwapLossBps(assessed.valueLossBps);
+        setSwapBlockReason(assessed.reason);
+        setSwapQuoteError("");
+      } catch (error: unknown) {
+        if (cancelled || isAbortError(error)) return;
+        lastSwapQuoteKeyRef.current = "";
+        clearQuote();
+        setSwapQuoteError(describeAchswapError(error) ?? "No quote. Check pool liquidity.");
+      } finally {
+        if (!cancelled) setSwapQuoting(false);
       }
     };
 
-    const timer = window.setTimeout(() => { void loadQuote(); }, 250);
+    const timer = window.setTimeout(() => { void loadQuote(); }, 400);
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [swapInput, swapDirection, slippageBps]);
@@ -1462,8 +1494,15 @@ export default function Home() {
   const handleSwap = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
     const isUsdcIn = swapDirection === "USDCtoEURC";
-    const amountIn = parseAmount(swapInput, isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS);
+    const inDecimals = isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS;
+    const outDecimals = isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS;
+    const tokenInAddress = isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS;
+    const tokenOutAddress = isUsdcIn ? EURC_ADDRESS : WUSDC_ADDRESS;
+    const tokenLabel = isUsdcIn ? "USDC" : "EURC";
+    const outLabel = isUsdcIn ? "EURC" : "USDC";
+    const amountIn = parseAmount(swapInput, inDecimals);
     if (!amountIn || amountIn <= BigInt(0)) return showMessage("Enter a valid amount");
+    if (!IS_ARC_MAINNET) return showMessage("Achswap routing is available on Arc Mainnet.");
 
     if (!isArcTestnet) {
       showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
@@ -1473,77 +1512,73 @@ export default function Home() {
 
     if (isUsdcIn && amountIn > poolUsdcFromNative(usdcBalanceRaw)) return showMessage("Insufficient USDC balance");
     if (!isUsdcIn && amountIn > eurcBalanceRaw) return showMessage("Insufficient EURC balance");
-    if (USE_ERC20_USDC && swapBlockReason) return showMessage(swapBlockReason);
+    if (swapBlockReason) return showMessage(swapBlockReason);
 
     setIsSwapping(true);
-    setSwapStatus("confirm");
+    setSwapStatus("routing");
     try {
       const ethereum = getEthereum();
       if (!ethereum) return showMessage("Wallet not found");
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
-      const deadline = swapDeadline();
+      const sender = await signer.getAddress();
 
-      if (USE_ERC20_USDC) {
-        if (!ethers.isAddress(NEXIO_SWAP_ADDRESS) || NEXIO_SWAP_ADDRESS === ethers.ZeroAddress) {
-          return showMessage("Set NEXT_PUBLIC_NEXIO_SWAP_ADDRESS before swapping.");
-        }
-        const quoted = await quoteSwap(getArcReadProvider(), amountIn, isUsdcIn, slippageBps);
-        if (quoted.blocked) return showMessage(quoted.reason);
-        if (quoted.amountOutMin <= BigInt(0)) return showMessage("Quoted output is too small to swap safely.");
-
-        const tokenLabel = isUsdcIn ? "USDC" : "EURC";
-        const tokenIn = new ethers.Contract(isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS, TOKEN_ABI, signer);
-        await ensureTokenAllowance(tokenIn, wallet, NEXIO_SWAP_ADDRESS, amountIn, tokenLabel);
-
-        const nexioSwap = new ethers.Contract(NEXIO_SWAP_ADDRESS, NEXIO_SWAP_ABI, signer);
-        showMessage(isUsdcIn ? "Confirm Swap in wallet (USDC → EURC)..." : "Confirm Swap in wallet (EURC → USDC)...");
-        setSwapStatus("confirm");
-        const tx = isUsdcIn
-          ? await nexioSwap.swapUSDCforEURC(amountIn, quoted.amountOutMin, deadline)
-          : await nexioSwap.swapEURCforUSDC(amountIn, quoted.amountOutMin, deadline);
-        showMessage("Broadcasting Swap...");
-        setSwapStatus("pending");
-        const receipt = await tx.wait();
-        addHistoryRecord(
-          "Nexio Swap",
-          `-${formatPretty(amountIn, isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS, 6)} ${tokenLabel}`,
-          `Min ${formatPretty(quoted.amountOutMin, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, 6)} ${isUsdcIn ? "EURC" : "USDC"}`,
-          "Completed",
-          receipt?.hash || ""
-        );
-        showMessage("Swap Successful! 🔄");
-      } else if (isUsdcIn) {
-        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
-        const path = [WUSDC_ADDRESS, EURC_ADDRESS];
-        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
-        const amountOutMin = applySlippage(amounts[1], slippageBps);
-        showMessage("Confirm Swap in wallet (USDC → EURC)...");
-        const tx = await router.swapExactETHForTokens(amountOutMin, path, wallet, deadline, { value: amountIn });
-        showMessage("Broadcasting Swap...");
-        setSwapStatus("pending");
-        const receipt = await tx.wait();
-        addHistoryRecord("Nexio Swap", `-${formatPretty(amountIn, WUSDC_DECIMALS, 6)} USDC`, `Min ${formatPretty(amountOutMin, EURC_DECIMALS, 6)} EURC`, "Completed", receipt?.hash || "");
-        showMessage("Swap Successful! 🔄");
-      } else {
-        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
-        const path = [EURC_ADDRESS, WUSDC_ADDRESS];
-        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
-        const amountOutMin = applySlippage(amounts[1], slippageBps);
-        const token = new ethers.Contract(EURC_ADDRESS, TOKEN_ABI, signer);
-        await ensureTokenAllowance(token, wallet, ROUTER_ADDRESS, amountIn, "EURC");
-        showMessage("Confirm Swap in wallet (EURC → USDC)...");
-        setSwapStatus("confirm");
-        const tx = await router.swapExactTokensForETH(amountIn, amountOutMin, path, wallet, deadline);
-        showMessage("Broadcasting Swap...");
-        setSwapStatus("pending");
-        const receipt = await tx.wait();
-        addHistoryRecord("Nexio Swap", `-${formatPretty(amountIn, EURC_DECIMALS, 6)} EURC`, `Min ${formatPretty(amountOutMin, WUSDC_DECIMALS, 6)} USDC`, "Completed", receipt?.hash || "");
-        showMessage("Swap Successful! 🔄");
+      if (swapExecutor && ethers.isAddress(swapExecutor)) {
+        const quotedToken = new ethers.Contract(tokenInAddress, TOKEN_ABI, signer);
+        await ensureTokenAllowance(quotedToken, sender, ethers.getAddress(swapExecutor), amountIn, tokenLabel);
       }
+
+      setSwapStatus("routing");
+      showMessage("Fetching Achswap route...");
+      const swap = await requestAchswapSwap({
+        tokenIn: tokenInAddress,
+        tokenOut: tokenOutAddress,
+        amountIn,
+        slippageBps,
+        chainId: ARC_CHAIN_ID,
+        sender,
+        recipient: sender,
+      });
+
+      const assessed = assessStableSwap(amountIn, inDecimals, swap.amountOut, outDecimals, swap.priceImpactBps);
+      if (assessed.blocked) return showMessage(assessed.reason);
+      if (swap.minAmountOut <= BigInt(0)) return showMessage("Quoted output is too small to swap safely.");
+
+      if (swap.approval) {
+        const approvalToken = new ethers.Contract(swap.approval.token, TOKEN_ABI, signer);
+        await ensureTokenAllowance(
+          approvalToken,
+          sender,
+          ethers.getAddress(swap.approval.spender),
+          swap.approval.amount,
+          tokenLabel
+        );
+      }
+
+      showMessage(isUsdcIn ? "Confirm Swap in wallet (USDC → EURC)..." : "Confirm Swap in wallet (EURC → USDC)...");
+      setSwapStatus("confirm");
+      const tx = await signer.sendTransaction({
+        to: swap.tx.to,
+        data: swap.tx.data,
+        value: swap.tx.value,
+        ...(swap.tx.gas > BigInt(0) ? { gasLimit: swap.tx.gas } : {}),
+      });
+      showMessage("Broadcasting Swap...");
+      setSwapStatus("pending");
+      const receipt = await tx.wait();
+      addHistoryRecord(
+        "Swap",
+        `-${formatPretty(amountIn, inDecimals, 6)} ${tokenLabel}`,
+        `Min ${formatPretty(swap.minAmountOut, outDecimals, 6)} ${outLabel}`,
+        "Completed",
+        receipt?.hash || ""
+      );
+      showMessage("Swap Successful! 🔄");
       setSwapInput("");
       setSwapQuote("");
       setSwapQuoteRaw(BigInt(0));
+      setSwapMinRaw(BigInt(0));
+      setSwapExecutor("");
       setSwapImpactBps(null);
       setSwapLossBps(null);
       setSwapBlockReason("");
@@ -1552,7 +1587,7 @@ export default function Home() {
       void fetchBalances(wallet, { force: true });
     } catch (error: unknown) {
       console.error("Swap Error:", error);
-      showMessage(getTxErrorMessage(error));
+      showMessage(describeAchswapError(error) ?? getTxErrorMessage(error));
     } finally {
       setIsSwapping(false);
       setSwapStatus(null);
@@ -2692,7 +2727,7 @@ export default function Home() {
                   <div className="flex items-start justify-between gap-3 mb-6 relative z-10">
                     <div>
                       <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Swap</h2>
-                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · {USE_ERC20_USDC ? "6-dec ERC-20 USDC" : "18-dec WUSDC"}</p>
+                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · Achswap</p>
                     </div>
                     <button
                       onClick={() => setShowSlippage((v) => !v)}
@@ -2715,7 +2750,7 @@ export default function Home() {
                           type="number"
                           inputMode="decimal"
                           value={customSlippage}
-                          onChange={(e) => { setCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setSlippageBps); }}
+                          onChange={(e) => { setCustomSlippage(e.target.value); applyCustomSlippage(e.target.value, setSlippageBps, 2000); }}
                           placeholder="Custom %"
                           className={`w-24 rounded-xl border px-3 py-1.5 text-xs font-bold ${tc.inputBg}`}
                         />
@@ -2757,12 +2792,13 @@ export default function Home() {
                       </div>
                       {swapQuoteRaw > BigInt(0) && (
                         <div className={`text-[10px] font-bold mt-2 ${tc.textMuted}`}>
-                          Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinOut, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
+                          Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinRaw, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
                         </div>
                       )}
-                      {USE_ERC20_USDC && swapImpactBps !== null && swapLossBps !== null && (
+                      {swapQuoteRaw > BigInt(0) && swapLossBps !== null && (
                         <div className={`text-[10px] font-bold mt-2 ${swapBlockReason ? "text-red-400" : tc.textMuted}`}>
-                          Price impact {slippageLabel(swapImpactBps)} · Value loss {slippageLabel(swapLossBps)}
+                          {swapImpactBps !== null ? `Price impact ${slippageLabel(swapImpactBps)} · ` : "Price impact n/a · "}
+                          Value loss {slippageLabel(swapLossBps)}
                         </div>
                       )}
                       {swapBlockReason && (
@@ -2773,23 +2809,31 @@ export default function Home() {
 
                     <button
                       onClick={!wallet ? connectWallet : handleSwap}
-                      disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient || !!swapBlockReason)}
+                      disabled={!!wallet && (isSwapping || swapQuoting || !swapAmountIn || !swapQuoteRaw || !!swapQuoteError || swapInsufficient || !!swapBlockReason)}
                       className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapBlockReason ? "bg-red-500/80 text-white" : swapDirection === "USDCtoEURC" ? "bg-cyan-500 hover:bg-cyan-400 text-white" : "bg-emerald-500 hover:bg-emerald-400 text-white"}`}
                     >
                       {!wallet
                         ? "Connect Wallet"
                         : isSwapping
-                          ? (swapStatus === "approving" ? `Approving ${swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}...` : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
+                          ? (swapStatus === "approving" ? `Approving ${swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}...` : swapStatus === "routing" ? "Finding route..." : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
+                          : swapQuoting
+                            ? "Quoting..."
                           : swapBlockReason
                             ? "Swap disabled"
                             : swapInsufficient
                             ? "Insufficient Balance"
+                            : swapQuoteError === "No route found."
+                              ? "No route found"
+                              : swapQuoteError
+                                ? "Quote unavailable"
                             : "Swap"}
                     </button>
                   </div>
 
                   <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>
-                    {USE_ERC20_USDC ? `NexioSwap ${NEXIO_SWAP_ADDRESS.slice(0, 6)}...${NEXIO_SWAP_ADDRESS.slice(-4)}` : `Router ${ROUTER_ADDRESS.slice(0, 6)}...${ROUTER_ADDRESS.slice(-4)}`}
+                    {swapExecutor && ethers.isAddress(swapExecutor)
+                      ? `Achswap executor ${ethers.getAddress(swapExecutor).slice(0, 6)}...${ethers.getAddress(swapExecutor).slice(-4)}`
+                      : "Routed by Achswap"}
                   </div>
                 </div>
               </div>

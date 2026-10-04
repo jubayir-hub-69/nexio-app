@@ -68,13 +68,6 @@ export const ANS_CONTRACT_ADDRESS = ACTIVE.ans;
 export const EURC_VAULT_ADDRESS = ACTIVE.eurcVault;
 export const USDC_VAULT_ADDRESS = ACTIVE.usdcVault;
 export const NEXIO_SWAP_ADDRESS = ACTIVE.swap;
-
-export const NEXIO_SWAP_ABI = [
-  "function swapUSDCforEURC(uint256 amountIn, uint256 amountOutMin, uint256 deadline) returns (uint256 amountOut)",
-  "function swapEURCforUSDC(uint256 amountIn, uint256 amountOutMin, uint256 deadline) returns (uint256 amountOut)",
-  "function usdc() view returns (address)",
-  "function eurc() view returns (address)",
-];
 export const USDC_ERC20_ADDRESS = "0x3600000000000000000000000000000000000000";
 
 export const DAILY_GM_ABI = [
@@ -219,65 +212,11 @@ function bpsBetween(expected: bigint, actual: bigint): number {
   return Number.isFinite(asNumber) ? asNumber : 10000;
 }
 
-export function quotePriceImpactBps(unitIn: bigint, spotOut: bigint, amountIn: bigint, amountOut: bigint): number {
-  if (unitIn <= BigInt(0) || spotOut <= BigInt(0) || amountIn <= BigInt(0) || amountOut <= BigInt(0)) return 10000;
-  const expected = (spotOut * amountIn) / unitIn;
-  return bpsBetween(expected, amountOut);
-}
-
 export function stableValueLossBps(amountIn: bigint, inDecimals: number, amountOut: bigint, outDecimals: number): number {
   if (amountIn <= BigInt(0) || inDecimals < 0 || outDecimals < 0 || inDecimals > 18 || outDecimals > 18) return 10000;
   const inNorm = amountIn * (BigInt(10) ** BigInt(18 - inDecimals));
   const outNorm = amountOut * (BigInt(10) ** BigInt(18 - outDecimals));
   return bpsBetween(inNorm, outNorm);
-}
-
-export type SwapQuote = {
-  amountOut: bigint;
-  amountOutMin: bigint;
-  priceImpactBps: number;
-  valueLossBps: number;
-  blocked: boolean;
-  reason: string;
-};
-
-export async function quoteSwap(
-  provider: ethers.Provider,
-  amountIn: bigint,
-  usdcIn: boolean,
-  slippageBps: number = DEFAULT_SLIPPAGE_BPS
-): Promise<SwapQuote> {
-  const router = new ethers.Contract(ROUTER_ADDRESS, [
-    "function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)",
-  ], provider);
-  const path = usdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
-  const inDecimals = usdcIn ? WUSDC_DECIMALS : EURC_DECIMALS;
-  const outDecimals = usdcIn ? EURC_DECIMALS : WUSDC_DECIMALS;
-  const unit = ethers.parseUnits("1", inDecimals);
-  const [trade, spot] = await Promise.all([
-    router.getAmountsOut(amountIn, path) as Promise<bigint[]>,
-    router.getAmountsOut(unit, path) as Promise<bigint[]>,
-  ]);
-  const amountOut = trade[trade.length - 1] ?? BigInt(0);
-  const spotOut = spot[spot.length - 1] ?? BigInt(0);
-  const priceImpactBps = quotePriceImpactBps(unit, spotOut, amountIn, amountOut);
-  const valueLossBps = stableValueLossBps(amountIn, inDecimals, amountOut, outDecimals);
-  const impactBlocked = priceImpactBps > MAX_SWAP_PRICE_IMPACT_BPS;
-  const lossBlocked = valueLossBps > MAX_SWAP_VALUE_LOSS_BPS;
-  let reason = "";
-  if (lossBlocked) {
-    reason = `Swap disabled. You would lose about ${(valueLossBps / 100).toFixed(2)}% versus the amount you pay. The pool is too thin.`;
-  } else if (impactBlocked) {
-    reason = `Swap disabled. Price impact is ${(priceImpactBps / 100).toFixed(2)}%, above the ${(MAX_SWAP_PRICE_IMPACT_BPS / 100).toFixed(2)}% limit.`;
-  }
-  return {
-    amountOut,
-    amountOutMin: applySlippage(amountOut, slippageBps),
-    priceImpactBps,
-    valueLossBps,
-    blocked: impactBlocked || lossBlocked,
-    reason,
-  };
 }
 
 export function formatExact(value: bigint, decimals: number): string {
