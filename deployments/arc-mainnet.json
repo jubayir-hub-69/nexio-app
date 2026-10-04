@@ -1,0 +1,23 @@
+{
+  "network": "arc_mainnet",
+  "chainId": 5042,
+  "deployer": "0x9AFe5CeF11fC10756faef213f7A30D9873B5d372",
+  "usdc": "0x3600000000000000000000000000000000000000",
+  "eurc": "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
+  "achswapRouter": "0x52FE40c00530db2e43d01652f903870571A14AFD",
+  "achswapFactory": "0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530",
+  "contracts": {
+    "NexNameService": "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7",
+    "DailyGM": "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31",
+    "NexioVault": "0xb30c9272a28749Ae0B04E1d5977337a570025009",
+    "NexioUSDCVault": "0x045700Cd0D442E65dcB549330580d9981bcbC5E0",
+    "NexioSwap": "0xD3504e2118b1c7a52cf44947510633562635ee03"
+  },
+  "transactions": {
+    "NexNameService": "0x26029fb3b4b05c7a8fea159b451918edecef2b58b1cac1acc7a8e917d37f1d7e",
+    "DailyGM": "0x9383f42623bae295339d7efb1a3b2050e8195a1149264b070955c135a6b9fbbd",
+    "NexioVault": "0x850855974630643415b98e794f1aef113624415d0b86a3a7b43929e4fc4691f0",
+    "NexioUSDCVault": "0x28f71baa7b36a8f27248f34f1a736f4d4ec971bcf4478ac9f97c99ea97522b99",
+    "NexioSwap": "0xd0257d930ac6c195b60f282a00ccded4bf9100497e8ebcb77bb44addf1bb358c"
+  }
+}

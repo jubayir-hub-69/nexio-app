@@ -13,6 +13,7 @@ import {
   ANS_CONTRACT_ADDRESS,
   ANS_ABI,
   WUSDC_DECIMALS,
+  NATIVE_USDC_DECIMALS,
   EURC_DECIMALS,
   LP_DECIMALS,
   ERC20_ABI as TOKEN_ABI,
@@ -40,6 +41,21 @@ import {
   resolveAddressToDomain,
   resolveDomainToAddress,
   isDomainAvailable,
+  ARC_CHAIN_ID,
+  ARC_CHAIN_ID_HEX,
+  ARC_RPC_URL,
+  ARC_EXPLORER,
+  ARC_NETWORK_LABEL,
+  EURC_ADDRESS,
+  EURC_VAULT_ADDRESS,
+  USDC_VAULT_ADDRESS,
+  USDC_VAULT_ABI,
+  USE_ERC20_USDC,
+  poolUsdcFromNative,
+  maxPoolUsdcSpend,
+  NEXIO_SWAP_ADDRESS,
+  NEXIO_SWAP_ABI,
+  quoteSwap,
 } from "@/lib/contracts";
 
 const QrScanner = dynamic(
@@ -47,17 +63,7 @@ const QrScanner = dynamic(
   { ssr: false }
 );
 
-const ARC_CHAIN_ID = 5042002;
-const ARC_CHAIN_ID_HEX = "0x4cef52";
-const ARC_RPC = "https://rpc.testnet.arc.network";
-const ARC_EXPLORER = "https://testnet.arcscan.app";
 const ARC_FAUCET = "https://faucet.circle.com";
-
-const EURC_ADDRESS = "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a";
-
-// REAL DEPLOYED SMART CONTRACTS
-const EURC_VAULT_ADDRESS = "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC";
-const USDC_VAULT_ADDRESS = "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8";
 
 const ERC20_ABI = [
   "function balanceOf(address owner) view returns (uint256)",
@@ -68,13 +74,6 @@ const ERC20_ABI = [
 
 const EURC_VAULT_ABI = [
   "function deposit(uint256 amount) external",
-  "function withdraw(uint256 amount) external",
-  "function stakedBalance(address) external view returns (uint256)",
-  "function getPendingYield(address user) external view returns (uint256)"
-];
-
-const USDC_VAULT_ABI = [
-  "function deposit() external payable",
   "function withdraw(uint256 amount) external",
   "function stakedBalance(address) external view returns (uint256)",
   "function getPendingYield(address user) external view returns (uint256)"
@@ -204,6 +203,9 @@ export default function Home() {
   const [swapQuote, setSwapQuote] = useState("");
   const [swapQuoteRaw, setSwapQuoteRaw] = useState<bigint>(BigInt(0));
   const [swapQuoteError, setSwapQuoteError] = useState("");
+  const [swapImpactBps, setSwapImpactBps] = useState<number | null>(null);
+  const [swapLossBps, setSwapLossBps] = useState<number | null>(null);
+  const [swapBlockReason, setSwapBlockReason] = useState("");
   const [slippageBps, setSlippageBps] = useState(100);
   const [customSlippage, setCustomSlippage] = useState("");
   const [showSlippage, setShowSlippage] = useState(false);
@@ -391,7 +393,7 @@ export default function Home() {
           const routerRate = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
           const oneEurc = ethers.parseUnits("1", 6);
           const amounts = await routerRate.getAmountsOut(oneEurc, [EURC_ADDRESS, WUSDC_ADDRESS]);
-          const fetchedRate = parseFloat(ethers.formatUnits(amounts[1], 18));
+          const fetchedRate = parseFloat(ethers.formatUnits(amounts[1], WUSDC_DECIMALS));
           if (fetchedRate > 0) setLiveEurcUsdRate(fetchedRate);
         } catch (rateError) {
           console.error("Failed to fetch live rate", rateError);
@@ -440,7 +442,7 @@ export default function Home() {
 
         if (nativeUsdcRaw !== null) {
           setUsdcBalanceRaw(nativeUsdcRaw);
-          setUsdcBalance(formatDisplay(nativeUsdcRaw, WUSDC_DECIMALS, 2));
+          setUsdcBalance(formatDisplay(nativeUsdcRaw, NATIVE_USDC_DECIMALS, 2));
         }
         if (wusdcRaw !== null) setWusdcBalanceRaw(wusdcRaw);
         if (eurcRaw !== null) {
@@ -475,7 +477,7 @@ export default function Home() {
           yieldPartsRef.current.eurc = Number(ethers.formatUnits(eurcYieldRaw, 6));
         }
         if (usdcYieldRaw !== null) {
-          yieldPartsRef.current.usdc = Number(ethers.formatUnits(usdcYieldRaw, 18));
+          yieldPartsRef.current.usdc = Number(ethers.formatUnits(usdcYieldRaw, WUSDC_DECIMALS));
         }
         if (eurcYieldRaw !== null || usdcYieldRaw !== null) {
           setLifetimePts(yieldPartsRef.current.eurc + yieldPartsRef.current.usdc);
@@ -858,8 +860,8 @@ export default function Home() {
           method: "wallet_addEthereumChain",
           params: [{
             chainId: ARC_CHAIN_ID_HEX,
-            chainName: "Arc Testnet",
-            rpcUrls: [ARC_RPC],
+            chainName: ARC_NETWORK_LABEL,
+            rpcUrls: [ARC_RPC_URL],
             blockExplorerUrls: [ARC_EXPLORER],
             nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
           }],
@@ -889,10 +891,10 @@ export default function Home() {
       const currentChainId = await syncNetwork();
 
       if (currentChainId !== ARC_CHAIN_ID) {
-        showMessage("Switching to Arc Testnet...");
+        showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
         const switched = await switchToArcTestnet();
         if (switched) showMessage("Wallet Connected Successfully");
-        else showMessage("Please switch to Arc Testnet manually in your wallet.");
+        else showMessage(`Please switch to ${ARC_NETWORK_LABEL} manually in your wallet.`);
       } else {
         showMessage("Wallet Connected Successfully");
       }
@@ -923,7 +925,7 @@ export default function Home() {
   const handleOpenSendModal = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
       if (!switched) return showMessage("Network switch failed. Please switch manually.");
     }
@@ -1000,7 +1002,7 @@ export default function Home() {
 
     const recipientCount = BigInt(addresses.length);
     if (sendAsset === "USDC") {
-      const perAmount = parseAmount(sendAmount, WUSDC_DECIMALS);
+      const perAmount = parseAmount(sendAmount, NATIVE_USDC_DECIMALS);
       if (!perAmount || perAmount <= BigInt(0)) return showMessage("Enter a valid amount greater than 0");
       const totalNeeded = perAmount * recipientCount;
       if (totalNeeded > maxNativeSpend(usdcBalanceRaw)) {
@@ -1035,12 +1037,12 @@ export default function Home() {
     const addresses = rawAddresses.map(a => a.trim()).filter(a => a !== "");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
       if (!switched) {
         sendLockRef.current = false;
         setIsSending(false);
-        return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+        return showMessage(`Network switch failed. Please switch to ${ARC_NETWORK_LABEL} manually.`);
       }
     }
 
@@ -1081,7 +1083,7 @@ export default function Home() {
       const memoHex = sendMemo ? ethers.hexlify(ethers.toUtf8Bytes(sendMemo)) : "0x";
       const memoBytes = sendMemo ? memoHex.replace("0x", "") : "";
       let successCount = 0;
-      const sendDecimals = sendAsset === "USDC" ? WUSDC_DECIMALS : EURC_DECIMALS;
+      const sendDecimals = sendAsset === "USDC" ? NATIVE_USDC_DECIMALS : EURC_DECIMALS;
       const batchTotalRaw = (parseAmount(sendAmount, sendDecimals) ?? BigInt(0)) * BigInt(resolvedAddresses.length);
       const batchTotalLabel = formatPretty(batchTotalRaw, sendDecimals, 6);
 
@@ -1177,9 +1179,9 @@ export default function Home() {
     if (!vaultInput || parseFloat(vaultInput) <= 0) return showMessage("Enter a valid amount");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Network switch failed. Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
     setIsVaultLoading(true);
@@ -1194,14 +1196,20 @@ export default function Home() {
 
       if (vaultAsset === "USDC") {
         const vaultContract = new ethers.Contract(USDC_VAULT_ADDRESS, USDC_VAULT_ABI, signer);
-        const amountWei = ethers.parseUnits(vaultInput, 18);
-        if (action === "stake" && amountWei > maxNativeSpend(usdcBalanceRaw)) {
+        const amountWei = ethers.parseUnits(vaultInput, WUSDC_DECIMALS);
+        if (action === "stake" && amountWei > maxPoolUsdcSpend(usdcBalanceRaw)) {
           return showMessage("Insufficient USDC balance (including gas).");
         }
 
         if (action === "stake") {
           showMessage("Depositing USDC in progress...");
-          tx = await vaultContract.deposit({ value: amountWei });
+          if (USE_ERC20_USDC) {
+            const tokenContract = new ethers.Contract(WUSDC_ADDRESS, ERC20_ABI, signer);
+            await ensureTokenAllowance(tokenContract, wallet, USDC_VAULT_ADDRESS, amountWei, "USDC");
+            tx = await vaultContract.deposit(amountWei);
+          } else {
+            tx = await vaultContract.deposit({ value: amountWei });
+          }
           receipt = await tx.wait();
           addHistoryRecord("Staked in Vault", `-${vaultInput} USDC`, "Nexio Yield Vault", "Completed", receipt?.hash || "");
           showMessage("Staked USDC successfully! 🌱");
@@ -1272,7 +1280,7 @@ export default function Home() {
 
   const fillSwapMax = () => {
     if (swapDirection === "USDCtoEURC") {
-      setSwapInput(formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS));
+      setSwapInput(formatExact(maxPoolUsdcSpend(usdcBalanceRaw), WUSDC_DECIMALS));
     } else {
       setSwapInput(formatExact(eurcBalanceRaw, EURC_DECIMALS));
     }
@@ -1280,7 +1288,7 @@ export default function Home() {
 
   const fillLpUsdcMax = () => {
     setLpLastEdited("usdc");
-    setLpUsdcInput(formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS));
+    setLpUsdcInput(formatExact(maxPoolUsdcSpend(usdcBalanceRaw), WUSDC_DECIMALS));
   };
 
   const fillLpEurcMax = () => {
@@ -1293,14 +1301,15 @@ export default function Home() {
     setLpRemoveInput(formatExact(lpBalanceRaw, LP_DECIMALS));
   };
 
+  const usdcPoolBalance = poolUsdcFromNative(usdcBalanceRaw);
   const swapAmountIn = parseAmount(swapInput, swapDirection === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS);
   const swapInsufficient = !!swapAmountIn && (
     swapDirection === "USDCtoEURC"
-      ? swapAmountIn > usdcBalanceRaw
+      ? swapAmountIn > usdcPoolBalance
       : swapAmountIn > eurcBalanceRaw
   );
   const swapMinOut = swapQuoteRaw > BigInt(0) ? applySlippage(swapQuoteRaw, slippageBps) : BigInt(0);
-  const swapUsdcLabel = formatPretty(usdcBalanceRaw, WUSDC_DECIMALS, 6);
+  const swapUsdcLabel = formatPretty(usdcPoolBalance, WUSDC_DECIMALS, 6);
   const swapEurcLabel = formatPretty(eurcBalanceRaw, EURC_DECIMALS, 6);
 
   useEffect(() => {
@@ -1312,6 +1321,9 @@ export default function Home() {
         setSwapQuote("");
         setSwapQuoteRaw(BigInt(0));
         setSwapQuoteError("");
+        setSwapImpactBps(null);
+        setSwapLossBps(null);
+        setSwapBlockReason("");
         return;
       }
 
@@ -1325,16 +1337,32 @@ export default function Home() {
 
       try {
         const provider = getArcReadProvider();
-        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
         const isUsdcIn = swapDirection === "USDCtoEURC";
-        const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
-        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
-        const out = amounts[amounts.length - 1];
-        if (!cancelled) {
-          lastSwapQuoteKeyRef.current = quoteKey;
-          setSwapQuoteRaw(out);
-          setSwapQuote(formatPretty(out, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
-          setSwapQuoteError("");
+        if (USE_ERC20_USDC) {
+          const quoted = await quoteSwap(provider, amountIn, isUsdcIn, slippageBps);
+          if (!cancelled) {
+            lastSwapQuoteKeyRef.current = quoteKey;
+            setSwapQuoteRaw(quoted.amountOut);
+            setSwapQuote(formatPretty(quoted.amountOut, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
+            setSwapImpactBps(quoted.priceImpactBps);
+            setSwapLossBps(quoted.valueLossBps);
+            setSwapBlockReason(quoted.reason);
+            setSwapQuoteError("");
+          }
+        } else {
+          const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, provider);
+          const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
+          const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
+          const out = amounts[amounts.length - 1];
+          if (!cancelled) {
+            lastSwapQuoteKeyRef.current = quoteKey;
+            setSwapQuoteRaw(out);
+            setSwapQuote(formatPretty(out, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, isUsdcIn ? 6 : 8));
+            setSwapImpactBps(null);
+            setSwapLossBps(null);
+            setSwapBlockReason("");
+            setSwapQuoteError("");
+          }
         }
       } catch {
         if (!cancelled && lastSwapQuoteKeyRef.current === "") {
@@ -1348,7 +1376,7 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [swapInput, swapDirection]);
+  }, [swapInput, swapDirection, slippageBps]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1438,13 +1466,14 @@ export default function Home() {
     if (!amountIn || amountIn <= BigInt(0)) return showMessage("Enter a valid amount");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
-    if (isUsdcIn && amountIn > usdcBalanceRaw) return showMessage("Insufficient USDC balance");
+    if (isUsdcIn && amountIn > poolUsdcFromNative(usdcBalanceRaw)) return showMessage("Insufficient USDC balance");
     if (!isUsdcIn && amountIn > eurcBalanceRaw) return showMessage("Insufficient EURC balance");
+    if (USE_ERC20_USDC && swapBlockReason) return showMessage(swapBlockReason);
 
     setIsSwapping(true);
     setSwapStatus("confirm");
@@ -1453,13 +1482,42 @@ export default function Home() {
       if (!ethereum) return showMessage("Wallet not found");
       const provider = new ethers.BrowserProvider(ethereum);
       const signer = await provider.getSigner();
-      const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
       const deadline = swapDeadline();
-      const path = isUsdcIn ? [WUSDC_ADDRESS, EURC_ADDRESS] : [EURC_ADDRESS, WUSDC_ADDRESS];
-      const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
-      const amountOutMin = applySlippage(amounts[1], slippageBps);
 
-      if (isUsdcIn) {
+      if (USE_ERC20_USDC) {
+        if (!ethers.isAddress(NEXIO_SWAP_ADDRESS) || NEXIO_SWAP_ADDRESS === ethers.ZeroAddress) {
+          return showMessage("Set NEXT_PUBLIC_NEXIO_SWAP_ADDRESS before swapping.");
+        }
+        const quoted = await quoteSwap(getArcReadProvider(), amountIn, isUsdcIn, slippageBps);
+        if (quoted.blocked) return showMessage(quoted.reason);
+        if (quoted.amountOutMin <= BigInt(0)) return showMessage("Quoted output is too small to swap safely.");
+
+        const tokenLabel = isUsdcIn ? "USDC" : "EURC";
+        const tokenIn = new ethers.Contract(isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS, TOKEN_ABI, signer);
+        await ensureTokenAllowance(tokenIn, wallet, NEXIO_SWAP_ADDRESS, amountIn, tokenLabel);
+
+        const nexioSwap = new ethers.Contract(NEXIO_SWAP_ADDRESS, NEXIO_SWAP_ABI, signer);
+        showMessage(isUsdcIn ? "Confirm Swap in wallet (USDC → EURC)..." : "Confirm Swap in wallet (EURC → USDC)...");
+        setSwapStatus("confirm");
+        const tx = isUsdcIn
+          ? await nexioSwap.swapUSDCforEURC(amountIn, quoted.amountOutMin, deadline)
+          : await nexioSwap.swapEURCforUSDC(amountIn, quoted.amountOutMin, deadline);
+        showMessage("Broadcasting Swap...");
+        setSwapStatus("pending");
+        const receipt = await tx.wait();
+        addHistoryRecord(
+          "Nexio Swap",
+          `-${formatPretty(amountIn, isUsdcIn ? WUSDC_DECIMALS : EURC_DECIMALS, 6)} ${tokenLabel}`,
+          `Min ${formatPretty(quoted.amountOutMin, isUsdcIn ? EURC_DECIMALS : WUSDC_DECIMALS, 6)} ${isUsdcIn ? "EURC" : "USDC"}`,
+          "Completed",
+          receipt?.hash || ""
+        );
+        showMessage("Swap Successful! 🔄");
+      } else if (isUsdcIn) {
+        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
+        const path = [WUSDC_ADDRESS, EURC_ADDRESS];
+        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
+        const amountOutMin = applySlippage(amounts[1], slippageBps);
         showMessage("Confirm Swap in wallet (USDC → EURC)...");
         const tx = await router.swapExactETHForTokens(amountOutMin, path, wallet, deadline, { value: amountIn });
         showMessage("Broadcasting Swap...");
@@ -1468,6 +1526,10 @@ export default function Home() {
         addHistoryRecord("Nexio Swap", `-${formatPretty(amountIn, WUSDC_DECIMALS, 6)} USDC`, `Min ${formatPretty(amountOutMin, EURC_DECIMALS, 6)} EURC`, "Completed", receipt?.hash || "");
         showMessage("Swap Successful! 🔄");
       } else {
+        const router = new ethers.Contract(ROUTER_ADDRESS, ROUTER_ABI, signer);
+        const path = [EURC_ADDRESS, WUSDC_ADDRESS];
+        const amounts = (await router.getAmountsOut(amountIn, path)) as bigint[];
+        const amountOutMin = applySlippage(amounts[1], slippageBps);
         const token = new ethers.Contract(EURC_ADDRESS, TOKEN_ABI, signer);
         await ensureTokenAllowance(token, wallet, ROUTER_ADDRESS, amountIn, "EURC");
         showMessage("Confirm Swap in wallet (EURC → USDC)...");
@@ -1482,6 +1544,9 @@ export default function Home() {
       setSwapInput("");
       setSwapQuote("");
       setSwapQuoteRaw(BigInt(0));
+      setSwapImpactBps(null);
+      setSwapLossBps(null);
+      setSwapBlockReason("");
       lastSwapQuoteKeyRef.current = "";
       invalidatePairCache();
       void fetchBalances(wallet, { force: true });
@@ -1498,9 +1563,9 @@ export default function Home() {
     if (!wallet) return showMessage("Please connect wallet first");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
     setIsLpLoading(true);
@@ -1538,7 +1603,7 @@ export default function Home() {
         amountUsdc = (await routerRead.quote(amountEurc, pairState.reserveEurc, pairState.reserveWusdc)) as bigint;
       }
 
-      if (amountUsdc > usdcBalanceRaw) return showMessage("Insufficient USDC balance");
+      if (amountUsdc > poolUsdcFromNative(usdcBalanceRaw)) return showMessage("Insufficient USDC balance");
       if (amountEurc > eurcBalanceRaw) return showMessage("Insufficient EURC balance");
 
       const provider = new ethers.BrowserProvider(ethereum);
@@ -1552,15 +1617,30 @@ export default function Home() {
 
       showMessage("Confirm Add Liquidity in wallet...");
       setLpAction("add");
-      const tx = await router.addLiquidityETH(
-        EURC_ADDRESS,
-        amountEurc,
-        amountTokenMin,
-        amountEthMin,
-        wallet,
-        swapDeadline(),
-        { value: amountUsdc }
-      );
+      const tx = USE_ERC20_USDC
+        ? await (async () => {
+            const usdcToken = new ethers.Contract(WUSDC_ADDRESS, TOKEN_ABI, signer);
+            await ensureTokenAllowance(usdcToken, wallet, ROUTER_ADDRESS, amountUsdc, "USDC");
+            return router.addLiquidity(
+              WUSDC_ADDRESS,
+              EURC_ADDRESS,
+              amountUsdc,
+              amountEurc,
+              amountEthMin,
+              amountTokenMin,
+              wallet,
+              swapDeadline()
+            );
+          })()
+        : await router.addLiquidityETH(
+            EURC_ADDRESS,
+            amountEurc,
+            amountTokenMin,
+            amountEthMin,
+            wallet,
+            swapDeadline(),
+            { value: amountUsdc }
+          );
       showMessage("Broadcasting liquidity deposit...");
       const receipt = await tx.wait();
       addHistoryRecord(
@@ -1591,9 +1671,9 @@ export default function Home() {
     if (!liquidity || liquidity <= BigInt(0)) return showMessage("Enter an LP amount to remove");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
     if (liquidity > lpBalanceRaw) return showMessage("Insufficient LP token balance");
@@ -1616,14 +1696,24 @@ export default function Home() {
 
       showMessage("Confirm Remove Liquidity in wallet...");
       setLpAction("remove");
-      const tx = await router.removeLiquidityETH(
-        EURC_ADDRESS,
-        liquidity,
-        applySlippage(underlying.eurc, lpSlippageBps),
-        applySlippage(underlying.wusdc, lpSlippageBps),
-        wallet,
-        swapDeadline()
-      );
+      const tx = USE_ERC20_USDC
+        ? await router.removeLiquidity(
+            WUSDC_ADDRESS,
+            EURC_ADDRESS,
+            liquidity,
+            applySlippage(underlying.wusdc, lpSlippageBps),
+            applySlippage(underlying.eurc, lpSlippageBps),
+            wallet,
+            swapDeadline()
+          )
+        : await router.removeLiquidityETH(
+            EURC_ADDRESS,
+            liquidity,
+            applySlippage(underlying.eurc, lpSlippageBps),
+            applySlippage(underlying.wusdc, lpSlippageBps),
+            wallet,
+            swapDeadline()
+          );
       showMessage("Broadcasting liquidity withdrawal...");
       const receipt = await tx.wait();
       addHistoryRecord(
@@ -1655,9 +1745,9 @@ export default function Home() {
     if (unclaimedPts <= 0) return showMessage("No pending NLP to claim");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Network switch failed. Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
     setIsVaultLoading(true);
@@ -1699,9 +1789,9 @@ export default function Home() {
   const executeDailyGM = async () => {
     if (!wallet) return showMessage("Please connect wallet first");
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Network switch failed. Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
     if (hasCheckedInToday) return showMessage("Already checked in today! Come back tomorrow.");
 
@@ -1786,7 +1876,7 @@ export default function Home() {
         showMessage(`Resolved: ${domain}.nex 🎉`);
       } else {
         setResolvedDomainResult(null);
-        setResolvedAddressError("No .nex domain registered for this address on Arc Testnet.");
+        setResolvedAddressError(`No .nex domain registered for this address on ${ARC_NETWORK_LABEL}.`);
       }
     } catch (error) {
       console.error("Reverse resolution error:", error);
@@ -1845,9 +1935,9 @@ export default function Home() {
     if (!wallet) return showMessage("Connect wallet first");
 
     if (!isArcTestnet) {
-      showMessage("Switching to Arc Testnet...");
+      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
       const switched = await switchToArcTestnet();
-      if (!switched) return showMessage("Network switch failed. Please switch to Arc Testnet manually.");
+      if (!switched) return showMessage(`Network switch failed. Please switch to ${ARC_NETWORK_LABEL} manually.`);
     }
 
     try {
@@ -1995,7 +2085,7 @@ export default function Home() {
               <img src="/nexio-logo.png" alt="Nexio Logo" crossOrigin="anonymous" className="w-full h-full object-contain rounded-2xl" />
             </div>
             <h2 className="text-3xl font-black text-white tracking-tight mb-2">Congratulations!</h2>
-            <p className="text-sm font-medium text-gray-300 mb-6">Your domain has been successfully registered, <span className="text-cyan-400 font-bold">verified on Arc Testnet</span>!</p>
+            <p className="text-sm font-medium text-gray-300 mb-6">Your domain has been successfully registered, <span className="text-cyan-400 font-bold">verified on {ARC_NETWORK_LABEL}</span>!</p>
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-500/50 bg-cyan-500/10 px-6 py-2 mb-8 pointer-events-none">
               <span className="text-cyan-400">⚡</span>
               <span className="text-sm font-black text-cyan-400 tracking-widest uppercase">Lifetime Ownership</span>
@@ -2111,7 +2201,7 @@ export default function Home() {
                   {(() => {
                     const recipients = (isBatchMode ? sendAddress.split(",") : [sendAddress]).map((a) => a.trim()).filter((a) => a !== "");
                     const count = isBatchMode ? Math.max(recipients.length, 1) : 1;
-                    const decimals = sendAsset === "USDC" ? WUSDC_DECIMALS : EURC_DECIMALS;
+                    const decimals = sendAsset === "USDC" ? NATIVE_USDC_DECIMALS : EURC_DECIMALS;
                     const per = parseAmount(sendAmount, decimals);
                     const total = per ? per * BigInt(count) : null;
                     const label = total ? formatPretty(total, decimals, 6) : sendAmount;
@@ -2445,7 +2535,7 @@ export default function Home() {
                         className={`w-full rounded-xl border px-4 py-3 focus:outline-none transition font-bold text-lg ${tc.inputBg}`}
                       />
                       <button
-                        onClick={() => setVaultInput(vaultAsset === "USDC" ? formatExact(maxNativeSpend(usdcBalanceRaw), WUSDC_DECIMALS) : formatExact(eurcBalanceRaw, EURC_DECIMALS))}
+                        onClick={() => setVaultInput(vaultAsset === "USDC" ? formatExact(maxPoolUsdcSpend(usdcBalanceRaw), WUSDC_DECIMALS) : formatExact(eurcBalanceRaw, EURC_DECIMALS))}
                         className={`absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 text-[10px] font-black uppercase rounded bg-white/10 hover:bg-white/20 transition-colors ${tc.textMain}`}
                       >
                         Max
@@ -2602,7 +2692,7 @@ export default function Home() {
                   <div className="flex items-start justify-between gap-3 mb-6 relative z-10">
                     <div>
                       <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>Swap</h2>
-                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · 18-dec WUSDC</p>
+                      <p className={`text-[10px] sm:text-xs mt-1 font-bold uppercase tracking-widest ${tc.textMuted}`}>USDC / EURC · {USE_ERC20_USDC ? "6-dec ERC-20 USDC" : "18-dec WUSDC"}</p>
                     </div>
                     <button
                       onClick={() => setShowSlippage((v) => !v)}
@@ -2670,25 +2760,37 @@ export default function Home() {
                           Min received ({slippageLabel(slippageBps)}): {formatPretty(swapMinOut, swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS, 6)}
                         </div>
                       )}
+                      {USE_ERC20_USDC && swapImpactBps !== null && swapLossBps !== null && (
+                        <div className={`text-[10px] font-bold mt-2 ${swapBlockReason ? "text-red-400" : tc.textMuted}`}>
+                          Price impact {slippageLabel(swapImpactBps)} · Value loss {slippageLabel(swapLossBps)}
+                        </div>
+                      )}
+                      {swapBlockReason && (
+                        <div className="text-[11px] font-bold mt-2 text-red-400 leading-relaxed">{swapBlockReason}</div>
+                      )}
                       {swapQuoteError && <div className="text-[10px] font-bold mt-2 text-red-400">{swapQuoteError}</div>}
                     </div>
 
                     <button
                       onClick={!wallet ? connectWallet : handleSwap}
-                      disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient)}
-                      className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapDirection === "USDCtoEURC" ? 'bg-cyan-500 hover:bg-cyan-400 text-white' : 'bg-emerald-500 hover:bg-emerald-400 text-white'}`}
+                      disabled={!!wallet && (isSwapping || !swapAmountIn || !!swapQuoteError || swapInsufficient || !!swapBlockReason)}
+                      className={`w-full py-4 sm:py-5 rounded-2xl font-black text-lg sm:text-xl transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:active:scale-100 ${swapBlockReason ? "bg-red-500/80 text-white" : swapDirection === "USDCtoEURC" ? "bg-cyan-500 hover:bg-cyan-400 text-white" : "bg-emerald-500 hover:bg-emerald-400 text-white"}`}
                     >
                       {!wallet
                         ? "Connect Wallet"
                         : isSwapping
-                          ? (swapStatus === "approving" ? "Approving EURC..." : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
-                          : swapInsufficient
+                          ? (swapStatus === "approving" ? `Approving ${swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}...` : swapStatus === "pending" ? "Pending..." : "Confirm in Wallet...")
+                          : swapBlockReason
+                            ? "Swap disabled"
+                            : swapInsufficient
                             ? "Insufficient Balance"
                             : "Swap"}
                     </button>
                   </div>
 
-                  <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>Router {ROUTER_ADDRESS.slice(0, 6)}...{ROUTER_ADDRESS.slice(-4)}</div>
+                  <div className={`text-[10px] mt-5 text-center font-bold tracking-widest ${tc.textMuted}`}>
+                    {USE_ERC20_USDC ? `NexioSwap ${NEXIO_SWAP_ADDRESS.slice(0, 6)}...${NEXIO_SWAP_ADDRESS.slice(-4)}` : `Router ${ROUTER_ADDRESS.slice(0, 6)}...${ROUTER_ADDRESS.slice(-4)}`}
+                  </div>
                 </div>
               </div>
             )}
@@ -2795,7 +2897,7 @@ export default function Home() {
                           ? "Connect Wallet"
                           : isLpLoading
                             ? (lpAction === "approve" ? "Approving EURC..." : "Adding Liquidity...")
-                            : ((parseAmount(lpUsdcInput, WUSDC_DECIMALS) ?? BigInt(0)) > usdcBalanceRaw || (parseAmount(lpEurcInput, EURC_DECIMALS) ?? BigInt(0)) > eurcBalanceRaw
+                            : ((parseAmount(lpUsdcInput, WUSDC_DECIMALS) ?? BigInt(0)) > poolUsdcFromNative(usdcBalanceRaw) || (parseAmount(lpEurcInput, EURC_DECIMALS) ?? BigInt(0)) > eurcBalanceRaw
                               ? "Insufficient Balance"
                               : "Add Liquidity")}
                       </button>
@@ -3003,7 +3105,7 @@ export default function Home() {
                         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                           <div>
                             <h3 className={`text-lg font-black ${tc.textMain}`}>Query Address → .nex Domain</h3>
-                            <p className={`text-xs ${tc.textMuted}`}>Enter any EVM address on Arc Testnet to reverse-resolve its on-chain domain.</p>
+                            <p className={`text-xs ${tc.textMuted}`}>Enter any EVM address on {ARC_NETWORK_LABEL} to reverse-resolve its on-chain domain.</p>
                           </div>
 
                           {/* Quick fill buttons */}
