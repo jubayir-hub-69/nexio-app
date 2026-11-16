@@ -1,74 +1,30 @@
 import { ethers } from "ethers";
 
-export type ArcNetworkName = "testnet" | "mainnet";
-
-const REQUESTED_NETWORK = (process.env.NEXT_PUBLIC_NETWORK || "testnet").trim().toLowerCase();
-export const ARC_NETWORK: ArcNetworkName =
-  REQUESTED_NETWORK === "mainnet" || REQUESTED_NETWORK === "arc_mainnet" ? "mainnet" : "testnet";
-export const IS_ARC_MAINNET = ARC_NETWORK === "mainnet";
-export const USE_ERC20_USDC = IS_ARC_MAINNET;
-export const ARC_NETWORK_LABEL = IS_ARC_MAINNET ? "Arc Mainnet" : "Arc Testnet";
+// Arc Mainnet (chain ID 5042) is the only network this app will talk to.
+export const ARC_CHAIN_ID = 5042;
+export const ARC_CHAIN_ID_HEX = "0x13b2";
+export const ARC_RPC_URL = "https://rpc.mainnet.arc.io";
+export const ARC_EXPLORER = "https://explorer.arc.io";
+export const ARC_NETWORK_LABEL = "Arc Mainnet";
 
 function pickAddress(value: string | undefined, fallback: string): string {
   const trimmed = (value || "").trim();
   return ethers.isAddress(trimmed) ? ethers.getAddress(trimmed) : fallback;
 }
 
-const TESTNET = {
-  chainId: 5042002,
-  chainIdHex: "0x4cef52",
-  rpcUrl: "https://rpc.testnet.arc.network",
-  explorer: "https://testnet.arcscan.app",
-  eurc: "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
-  usdcPool: "0xDe5DB9049a8dd344dC1B7Bbb098f9da60930A6dA",
-  usdcPoolDecimals: 18,
-  factory: "0x7cC023C7184810B84657D55c1943eBfF8603B72B",
-  router: "0xB92428D440c335546b69138F7fAF689F5ba8D436",
-  dailyGm: "0x38e1458db96272B23c270AC2428f849D8b7611AD",
-  ans: "0x19c27c2a8729e8A326dF24EF740832b09A607fD0",
-  eurcVault: "0x9b3D45Fb7Ce921baB078aB270f7f67b54Fc7c0AC",
-  usdcVault: "0x0cbF1bA0D6F7e820f25FBE473Be352E516C0F1C8",
-  swap: ethers.ZeroAddress,
-};
-
 const MAINNET_USDC = "0x3600000000000000000000000000000000000000";
 const MAINNET_EURC = "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1";
-const MAINNET_FACTORY = "0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530";
-const MAINNET_ROUTER = "0x52FE40c00530db2e43d01652f903870571A14AFD";
 
-const MAINNET = {
-  chainId: 5042,
-  chainIdHex: "0x13b2",
-  rpcUrl: "https://rpc.mainnet.arc.io",
-  explorer: "https://explorer.arc.io",
-  eurc: MAINNET_EURC,
-  usdcPool: MAINNET_USDC,
-  usdcPoolDecimals: 6,
-  factory: MAINNET_FACTORY,
-  router: MAINNET_ROUTER,
-  dailyGm: pickAddress(process.env.NEXT_PUBLIC_DAILY_GM_ADDRESS, "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31"),
-  ans: pickAddress(process.env.NEXT_PUBLIC_ANS_ADDRESS, "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7"),
-  eurcVault: pickAddress(process.env.NEXT_PUBLIC_EURC_VAULT_ADDRESS, "0xb30c9272a28749Ae0B04E1d5977337a570025009"),
-  usdcVault: pickAddress(process.env.NEXT_PUBLIC_USDC_VAULT_ADDRESS, "0x045700Cd0D442E65dcB549330580d9981bcbC5E0"),
-  swap: pickAddress(process.env.NEXT_PUBLIC_NEXIO_SWAP_ADDRESS, "0xD3504e2118b1c7a52cf44947510633562635ee03"),
-};
-
-const ACTIVE = IS_ARC_MAINNET ? MAINNET : TESTNET;
-
-export const ARC_CHAIN_ID = ACTIVE.chainId;
-export const ARC_CHAIN_ID_HEX = ACTIVE.chainIdHex;
-export const ARC_RPC_URL = ACTIVE.rpcUrl;
-export const ARC_EXPLORER = ACTIVE.explorer;
-export const EURC_ADDRESS = ACTIVE.eurc;
-export const WUSDC_ADDRESS = ACTIVE.usdcPool;
-export const FACTORY_ADDRESS = ACTIVE.factory;
-export const ROUTER_ADDRESS = ACTIVE.router;
-export const DAILY_GM_ADDRESS = ACTIVE.dailyGm;
-export const ANS_CONTRACT_ADDRESS = ACTIVE.ans;
-export const EURC_VAULT_ADDRESS = ACTIVE.eurcVault;
-export const USDC_VAULT_ADDRESS = ACTIVE.usdcVault;
-export const NEXIO_SWAP_ADDRESS = ACTIVE.swap;
-export const USDC_ERC20_ADDRESS = "0x3600000000000000000000000000000000000000";
+export const EURC_ADDRESS = MAINNET_EURC;
+export const WUSDC_ADDRESS = MAINNET_USDC;
+export const USDC_ERC20_ADDRESS = MAINNET_USDC;
+export const FACTORY_ADDRESS = "0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530";
+export const ROUTER_ADDRESS = "0x52FE40c00530db2e43d01652f903870571A14AFD";
+export const DAILY_GM_ADDRESS = pickAddress(process.env.NEXT_PUBLIC_DAILY_GM_ADDRESS, "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31");
+export const ANS_CONTRACT_ADDRESS = pickAddress(process.env.NEXT_PUBLIC_ANS_ADDRESS, "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7");
+export const EURC_VAULT_ADDRESS = pickAddress(process.env.NEXT_PUBLIC_EURC_VAULT_ADDRESS, "0xb30c9272a28749Ae0B04E1d5977337a570025009");
+export const USDC_VAULT_ADDRESS = pickAddress(process.env.NEXT_PUBLIC_USDC_VAULT_ADDRESS, "0x045700Cd0D442E65dcB549330580d9981bcbC5E0");
+export const NEXIO_SWAP_ADDRESS = pickAddress(process.env.NEXT_PUBLIC_NEXIO_SWAP_ADDRESS, "0xD3504e2118b1c7a52cf44947510633562635ee03");
 
 export const DAILY_GM_ABI = [
   "function checkIn() external",
@@ -81,6 +37,8 @@ export const ANS_ABI = [
   "function resolve(string _name) external view returns (address)",
   "function resolveByAddress(address _owner) external view returns (string memory)",
   "function isAvailable(string _name) external view returns (bool)",
+  "function hasDomain(address _owner) external view returns (bool)",
+  "function getFullDomain(address _owner) external view returns (string memory)",
   "event DomainRegistered(string indexed name, address indexed owner)"
 ];
 
@@ -96,7 +54,7 @@ export function getArcReadProvider(): ethers.JsonRpcProvider {
 }
 
 export const NATIVE_USDC_DECIMALS = 18;
-export const WUSDC_DECIMALS = ACTIVE.usdcPoolDecimals;
+export const WUSDC_DECIMALS = 6;
 export const EURC_DECIMALS = 6;
 export const LP_DECIMALS = 18;
 
@@ -105,36 +63,58 @@ export const SLIPPAGE_PRESETS = [50, 100, 300] as const;
 export const MAX_SWAP_PRICE_IMPACT_BPS = 500;
 export const MAX_SWAP_VALUE_LOSS_BPS = 2000;
 export const DEADLINE_SECONDS = 20 * 60;
-export const NATIVE_GAS_BUFFER = ethers.parseUnits("0.02", 18);
+/** Native USDC kept back so a max spend still pays Arc gas. 0.005 USDC, 18-decimal native units. */
+export const NATIVE_GAS_BUFFER = ethers.parseUnits("0.005", 18);
+export const POOL_SKEW_LIMIT_BPS = 500;
 
-export const USDC_VAULT_ABI = USE_ERC20_USDC
-  ? [
-      "function deposit(uint256 amount) external",
-      "function withdraw(uint256 amount) external",
-      "function stakedBalance(address) external view returns (uint256)",
-      "function getPendingYield(address user) external view returns (uint256)",
-    ]
-  : [
-      "function deposit() external payable",
-      "function withdraw(uint256 amount) external",
-      "function stakedBalance(address) external view returns (uint256)",
-      "function getPendingYield(address user) external view returns (uint256)",
-    ];
+export const USDC_VAULT_ABI = [
+  "function deposit(uint256 amount) external",
+  "function withdraw(uint256 amount) external",
+  "function stakedBalance(address) external view returns (uint256)",
+  "function getPendingYield(address user) external view returns (uint256)",
+];
 
 const USDC_POOL_SCALE = BigInt(10) ** BigInt(NATIVE_USDC_DECIMALS - WUSDC_DECIMALS);
 
 export function poolUsdcFromNative(nativeAmount: bigint): bigint {
-  if (WUSDC_DECIMALS === NATIVE_USDC_DECIMALS) return nativeAmount;
   return nativeAmount / USDC_POOL_SCALE;
 }
 
 export function maxPoolUsdcSpend(nativeBalance: bigint, buffer: bigint = NATIVE_GAS_BUFFER): bigint {
-  if (WUSDC_DECIMALS === NATIVE_USDC_DECIMALS) {
-    return nativeBalance > buffer ? nativeBalance - buffer : BigInt(0);
-  }
   const poolBalance = poolUsdcFromNative(nativeBalance);
   const poolBuffer = poolUsdcFromNative(buffer);
   return poolBalance > poolBuffer ? poolBalance - poolBuffer : BigInt(0);
+}
+
+/** USDC per 1 EURC implied by V2 reserves. Both reserves are 6-decimal token units. */
+export function poolPriceUsdPerEurc(reserveUsdc: bigint, reserveEurc: bigint): number | null {
+  if (reserveUsdc <= BigInt(0) || reserveEurc <= BigInt(0)) return null;
+  const scaled = (reserveUsdc * BigInt(1_000_000)) / reserveEurc;
+  const price = Number(scaled) / 1_000_000;
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+export function priceDivergenceBps(left: number, right: number): number | null {
+  if (!(left > 0) || !(right > 0) || !Number.isFinite(left) || !Number.isFinite(right)) return null;
+  return Math.round((Math.abs(left - right) / right) * 10000);
+}
+
+export function assertArcChainId(chainId: number): void {
+  if (chainId !== ARC_CHAIN_ID) {
+    throw new Error(`Wallet is on chain ${chainId}. Switch to Arc Mainnet (5042).`);
+  }
+}
+
+export function assertTransactionRequest(tx: { to: string; data: string; value: bigint }): void {
+  if (typeof tx.to !== "string" || !ethers.isAddress(tx.to) || tx.to === ethers.ZeroAddress) {
+    throw new Error("Transaction target is not a valid address.");
+  }
+  if (typeof tx.data !== "string" || !/^0x[0-9a-fA-F]*$/.test(tx.data)) {
+    throw new Error("Transaction data is not valid hex.");
+  }
+  if (typeof tx.value !== "bigint" || tx.value < BigInt(0)) {
+    throw new Error("Transaction value cannot be negative.");
+  }
 }
 
 export const ERC20_ABI = [
@@ -212,11 +192,16 @@ function bpsBetween(expected: bigint, actual: bigint): number {
   return Number.isFinite(asNumber) ? asNumber : 10000;
 }
 
-export function stableValueLossBps(amountIn: bigint, inDecimals: number, amountOut: bigint, outDecimals: number): number {
-  if (amountIn <= BigInt(0) || inDecimals < 0 || outDecimals < 0 || inDecimals > 18 || outDecimals > 18) return 10000;
-  const inNorm = amountIn * (BigInt(10) ** BigInt(18 - inDecimals));
-  const outNorm = amountOut * (BigInt(10) ** BigInt(18 - outDecimals));
-  return bpsBetween(inNorm, outNorm);
+/** Shortfall versus a 1-unit spot quote for the same pair. USDC and EURC are not treated as 1:1. */
+export function valueLossVersusSpotBps(
+  amountIn: bigint,
+  amountOut: bigint,
+  spotAmountIn: bigint,
+  spotAmountOut: bigint
+): number {
+  if (amountIn <= BigInt(0) || spotAmountIn <= BigInt(0) || spotAmountOut <= BigInt(0)) return 10000;
+  const expectedOut = (amountIn * spotAmountOut) / spotAmountIn;
+  return bpsBetween(expectedOut, amountOut);
 }
 
 export function formatExact(value: bigint, decimals: number): string {

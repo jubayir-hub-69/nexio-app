@@ -15,11 +15,6 @@ const config: HardhatUserConfig = {
     },
   },
   networks: {
-    arc_testnet: {
-      url: "https://rpc.testnet.arc.io",
-      chainId: 5042002,
-      accounts,
-    },
     arc_mainnet: {
       url: "https://rpc.mainnet.arc.io",
       chainId: 5042,

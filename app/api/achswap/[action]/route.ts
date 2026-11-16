@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isRequestAbort, parseQuoteBody, parseSwapBody, postAchswap } from "@/lib/achswap-server";
+import { isRequestAbort, parseQuoteBody, parseSwapBody, postAchswap, postAchswapQuote, withProtocolFee } from "@/lib/achswap-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +35,21 @@ export async function POST(
   }
 
   try {
-    const result = await postAchswap(action, parsed.value, request.signal);
+    const priced = await withProtocolFee(parsed.value);
+    const swapFields = parsed.value as { sender?: string; recipient?: string };
+    const upstream = swapFields.sender && swapFields.recipient
+      ? { ...priced, sender: swapFields.sender, recipient: swapFields.recipient }
+      : priced;
+    let result = action === "quote"
+      ? await postAchswapQuote(upstream, request.signal)
+      : await postAchswap("swap", upstream, request.signal);
+    if ((result.status === 400 || result.status === 422) && upstream.feeBps > 0) {
+      const fallback = { ...upstream, feeBps: 0 as const };
+      delete fallback.feeRecipient;
+      result = action === "quote"
+        ? await postAchswapQuote(fallback, request.signal)
+        : await postAchswap("swap", fallback, request.signal);
+    }
     return NextResponse.json(result.body, {
       status: result.status,
       headers: { "Cache-Control": "no-store" },

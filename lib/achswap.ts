@@ -1,4 +1,4 @@
-import { MAX_SWAP_PRICE_IMPACT_BPS, MAX_SWAP_VALUE_LOSS_BPS, stableValueLossBps } from "@/lib/contracts";
+import { ARC_CHAIN_ID, MAX_SWAP_PRICE_IMPACT_BPS, MAX_SWAP_VALUE_LOSS_BPS, valueLossVersusSpotBps } from "@/lib/contracts";
 
 export const ACHSWAP_API_BASE = "https://trade.achswap.app/api/v1";
 export const ACHSWAP_FEE_BPS = 0;
@@ -26,8 +26,9 @@ export type AchswapQuoteRequest = {
   tokenIn: string;
   tokenOut: string;
   amountIn: string;
-  feeBps: 0;
+  feeBps: number;
   slippageBps: number;
+  trader?: string;
 };
 
 export type AchswapApproval = {
@@ -47,6 +48,7 @@ export type AchswapQuote = {
   amountOut: bigint;
   minAmountOut: bigint;
   priceImpactBps: number | null;
+  partnerBps: number | null;
   executor: string;
   requestId: string;
 };
@@ -57,7 +59,7 @@ export type AchswapSwap = AchswapQuote & {
 };
 
 export type StableSwapAssessment = {
-  valueLossBps: number;
+  valueLossBps: number | null;
   blocked: boolean;
   reason: string;
 };
@@ -79,8 +81,8 @@ export function isNativeAchswapToken(token: string): boolean {
 export function describeAchswapError(error: unknown): string | null {
   if (!(error instanceof AchswapApiError)) return null;
   if (error.code === "NO_ROUTE" || /no route/i.test(error.message)) return "No route found.";
-  if (error.code === "MISSING_API_KEY") return "Set NEXT_PUBLIC_ACHSWAP_API_KEY before swapping.";
-  if (error.code === "UNAUTHORIZED") return "Achswap rejected the API key. Check NEXT_PUBLIC_ACHSWAP_API_KEY.";
+  if (error.code === "MISSING_API_KEY") return "Swaps are unavailable. The Achswap key is not configured on the server.";
+  if (error.code === "UNAUTHORIZED") return "Achswap rejected the server API key.";
   if (error.code === "RATE_LIMITED" || error.code === "CONCURRENCY_LIMITED") {
     return "Achswap is busy. Wait a moment and try again.";
   }
@@ -92,23 +94,64 @@ export function describeAchswapError(error: unknown): string | null {
   return error.message.slice(0, 180) || "Achswap request failed.";
 }
 
+const SPOT_CACHE_MS = 30_000;
+const spotCache = new Map<string, { amountOut: bigint; at: number }>();
+
 export function assessStableSwap(
   amountIn: bigint,
-  inDecimals: number,
   amountOut: bigint,
-  outDecimals: number,
+  spotAmountIn: bigint | null,
+  spotAmountOut: bigint | null,
   priceImpactBps: number | null
 ): StableSwapAssessment {
-  const valueLossBps = stableValueLossBps(amountIn, inDecimals, amountOut, outDecimals);
+  const hasSpot =
+    spotAmountIn !== null &&
+    spotAmountOut !== null &&
+    spotAmountIn > BigInt(0) &&
+    spotAmountOut > BigInt(0);
+  const valueLossBps = hasSpot
+    ? valueLossVersusSpotBps(amountIn, amountOut, spotAmountIn, spotAmountOut)
+    : priceImpactBps === null
+      ? null
+      : Math.max(0, priceImpactBps);
   const impactBlocked = priceImpactBps !== null && priceImpactBps > MAX_SWAP_PRICE_IMPACT_BPS;
-  const lossBlocked = valueLossBps > MAX_SWAP_VALUE_LOSS_BPS;
+  const lossBlocked = valueLossBps !== null && valueLossBps > MAX_SWAP_VALUE_LOSS_BPS;
   let reason = "";
-  if (lossBlocked) {
-    reason = `Swap disabled. You would lose about ${(valueLossBps / 100).toFixed(2)}% versus the amount you pay. The pool is too thin.`;
+  if (lossBlocked && valueLossBps !== null) {
+    reason = `Swap disabled. This quote is ${(valueLossBps / 100).toFixed(2)}% worse than the live 1-unit spot rate, above the ${(MAX_SWAP_VALUE_LOSS_BPS / 100).toFixed(2)}% limit.`;
   } else if (impactBlocked && priceImpactBps !== null) {
     reason = `Swap disabled. Price impact is ${(priceImpactBps / 100).toFixed(2)}%, above the ${(MAX_SWAP_PRICE_IMPACT_BPS / 100).toFixed(2)}% limit.`;
   }
   return { valueLossBps, blocked: impactBlocked || lossBlocked, reason };
+}
+
+/** Quote exactly 1 whole token. Cached for 30s. Returns null when Achswap has no route. */
+export async function requestOneUnitSpotOut(input: {
+  tokenIn: string;
+  tokenOut: string;
+  decimals: number;
+  chainId?: number;
+  signal?: AbortSignal;
+}): Promise<bigint | null> {
+  const key = `${input.chainId ?? ARC_CHAIN_ID}:${input.tokenIn.toLowerCase()}:${input.tokenOut.toLowerCase()}`;
+  const hit = spotCache.get(key);
+  if (hit && Date.now() - hit.at < SPOT_CACHE_MS) return hit.amountOut;
+  try {
+    const quoted = await requestAchswapQuote({
+      tokenIn: input.tokenIn,
+      tokenOut: input.tokenOut,
+      amountIn: BigInt(10) ** BigInt(input.decimals),
+      slippageBps: 50,
+      chainId: input.chainId ?? ARC_CHAIN_ID,
+      signal: input.signal,
+    });
+    if (quoted.amountOut <= BigInt(0)) return null;
+    spotCache.set(key, { amountOut: quoted.amountOut, at: Date.now() });
+    return quoted.amountOut;
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    return null;
+  }
 }
 
 export function buildQuoteRequest(input: {
@@ -117,6 +160,7 @@ export function buildQuoteRequest(input: {
   amountIn: bigint;
   slippageBps: number;
   chainId: number;
+  trader?: string;
 }): AchswapQuoteRequest {
   return {
     chainId: input.chainId,
@@ -125,6 +169,7 @@ export function buildQuoteRequest(input: {
     amountIn: input.amountIn.toString(),
     feeBps: ACHSWAP_FEE_BPS,
     slippageBps: clampSlippageBps(input.slippageBps),
+    ...(input.trader ? { trader: input.trader } : {}),
   };
 }
 
@@ -135,6 +180,7 @@ export async function requestAchswapQuote(
     amountIn: bigint;
     slippageBps: number;
     chainId: number;
+    trader?: string;
     signal?: AbortSignal;
   }
 ): Promise<AchswapQuote> {
@@ -197,10 +243,13 @@ export function normalizeQuote(payload: unknown): AchswapQuote {
   if (!body) throw new AchswapApiError(502, "INVALID_RESPONSE", "Achswap returned an unreadable quote.");
   const amountOut = readAmount(body.amountOut, "amountOut");
   const minAmountOut = readAmount(body.minAmountOut ?? body.amountOutMin, "minAmountOut");
+  const fees = asRecord(body.fees);
+  const partnerBps = fees ? readImpact(fees.partnerBps) : readImpact(body.partnerBps);
   return {
     amountOut,
     minAmountOut,
     priceImpactBps: readImpact(body.priceImpactBps),
+    partnerBps,
     executor: readExecutor(body),
     requestId: typeof body.requestId === "string" ? body.requestId : "",
   };

@@ -24,3 +24,52 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes nx-flow {
+  0% { offset-distance: 0%; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+@keyframes nx-pulse {
+  0%, 100% { transform: scale(1); opacity: 0.45; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@keyframes nx-dash {
+  to { stroke-dashoffset: -48; }
+}
+
+@keyframes nx-lock {
+  0%, 40% { transform: translateY(0); }
+  55% { transform: translateY(3px); }
+  70%, 100% { transform: translateY(0); }
+}
+
+@keyframes nx-meter {
+  0% { transform: scaleX(0.15); }
+  100% { transform: scaleX(var(--nx-meter, 1)); }
+}
+
+.nx-particle {
+  offset-rotate: 0deg;
+  animation: nx-flow 3.6s linear infinite;
+}
+
+.nx-dash {
+  stroke-dasharray: 6 8;
+  animation: nx-dash 1.4s linear infinite;
+}
+
+.nx-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: nx-pulse 2.4s ease-in-out infinite;
+}
+
+.nx-lock {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: nx-lock 2.8s ease-in-out infinite;
+}
