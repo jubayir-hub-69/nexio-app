@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 300" width="920" height="300" role="img" aria-labelledby="hist-title hist-desc">
+  <title id="hist-title">Adaptive eth_getLogs On-Chain History Indexer and SSOT Spec Registry</title>
+  <desc id="hist-desc">Scans 5,000-block windows on Arc Mainnet with automatic range-split fallback, decodes Transfer, Vault, NLPClaimed, CheckedIn, and DomainRegistered logs, and syncs protocol-spec.ts across docs endpoints.</desc>
+  <defs>
+    <linearGradient id="bg-hist" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#060d1a" />
+      <stop offset="100%" stop-color="#071a28" />
+    </linearGradient>
+    <pattern id="grid-hist" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#1e293b" stroke-width="0.7" stroke-opacity="0.45" />
+    </pattern>
+    <clipPath id="clip-hist">
+      <rect x="0" y="0" width="920" height="300" rx="20" />
+    </clipPath>
+  </defs>
+  <style>
+    .f-sans { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .f-mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
+    @keyframes hist-dash { to { stroke-dashoffset: -36; } }
+    @keyframes scan-bar { 0% { transform: translateX(0px); } 50% { transform: translateX(132px); } 100% { transform: translateX(0px); } }
+    .h-flow { stroke-dasharray: 6 6; animation: hist-dash 1.3s linear infinite; }
+    .window-scan { animation: scan-bar 3.8s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .h-flow, .window-scan { animation: none !important; }
+    }
+  </style>
+
+  <g clip-path="url(#clip-hist)">
+    <rect width="920" height="300" fill="url(#bg-hist)" />
+    <rect width="920" height="300" fill="url(#grid-hist)" />
+
+    <text x="32" y="34" fill="#94a3b8" font-size="10" font-weight="800" letter-spacing="1.6" class="f-sans">ADAPTIVE ETH_GETLOGS INDEXER &amp; SINGLE-SOURCE-OF-TRUTH SPEC REGISTRY</text>
+    <rect x="650" y="18" width="238" height="22" rx="11" fill="#072235" stroke="#0284c7" />
+    <text x="769" y="33" text-anchor="middle" fill="#7dd3fc" font-size="9.5" font-weight="800" class="f-mono">5,000-BLOCK ADAPTIVE WINDOWS</text>
+
+    <!-- Left: Block Window Scanner -->
+    <rect x="32" y="66" width="232" height="180" rx="14" fill="#081629" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="1.4" />
+    <text x="48" y="92" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">eth_getLogs Scanner</text>
+    <text x="48" y="110" fill="#94a3b8" font-size="10" class="f-mono">[toBlock - 4999 .. toBlock]</text>
+
+    <!-- Animated Block Scanner Track -->
+    <rect x="48" y="126" width="200" height="26" rx="7" fill="#040b14" stroke="#1e293b" />
+    <g class="window-scan">
+      <rect x="52" y="130" width="60" height="18" rx="5" fill="#0284c7" fill-opacity="0.45" stroke="#38bdf8" />
+    </g>
+
+    <rect x="48" y="164" width="200" height="66" rx="9" fill="#050d1a" stroke="#1e293b" />
+    <text x="58" y="183" fill="#7dd3fc" font-size="9.5" font-weight="800" class="f-mono">Auto-Halving Fallback</text>
+    <text x="58" y="200" fill="#cbd5e1" font-size="9.5" class="f-sans">Splits block range on RPC limit</text>
+    <text x="58" y="216" fill="#6ee7b7" font-size="9.5" class="f-mono">+ Cursor Pagination ("Older")</text>
+
+    <!-- Center: Decoded Contract Event Topics -->
+    <rect x="312" y="66" width="286" height="180" rx="14" fill="#08192e" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="1.4" />
+    <text x="330" y="92" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">Decoded On-Chain Topics</text>
+
+    <rect x="328" y="106" width="254" height="28" rx="7" fill="#050d1a" stroke="#0284c7" stroke-opacity="0.45" />
+    <text x="340" y="124" fill="#bae6fd" font-size="10" font-weight="700" class="f-mono">Transfer(from, to, value) &#183; USDC/EURC</text>
+
+    <rect x="328" y="140" width="254" height="28" rx="7" fill="#051715" stroke="#059669" stroke-opacity="0.45" />
+    <text x="340" y="158" fill="#a7f3d0" font-size="10" font-weight="700" class="f-mono">Deposited / Withdrawn / NLPClaimed</text>
+
+    <rect x="328" y="174" width="254" height="28" rx="7" fill="#17140c" stroke="#d97706" stroke-opacity="0.45" />
+    <text x="340" y="192" fill="#fde68a" font-size="10" font-weight="700" class="f-mono">CheckedIn(user, streak, timestamp)</text>
+
+    <rect x="328" y="208" width="254" height="28" rx="7" fill="#081829" stroke="#38bdf8" stroke-opacity="0.45" />
+    <text x="340" y="226" fill="#7dd3fc" font-size="10" font-weight="700" class="f-mono">DomainRegistered(name, owner)</text>
+
+    <!-- Right: Verified Feed + SSOT Spec Sync -->
+    <rect x="646" y="66" width="242" height="84" rx="14" fill="#06221d" stroke="#10b981" stroke-opacity="0.7" stroke-width="1.4" />
+    <text x="662" y="91" fill="#f8fafc" font-size="12.5" font-weight="800" class="f-sans">Verified Explorer Feed</text>
+    <text x="662" y="111" fill="#6ee7b7" font-size="10" font-weight="700" class="f-mono">Block # &#183; Tx Hash &#183; Exact Delta</text>
+    <text x="662" y="130" fill="#cbd5e1" font-size="9.5" class="f-sans">Direct explorer.arc.io/tx/ links</text>
+
+    <rect x="646" y="162" width="242" height="84" rx="14" fill="#08172b" stroke="#38bdf8" stroke-opacity="0.6" stroke-width="1.4" />
+    <text x="662" y="187" fill="#f8fafc" font-size="12.5" font-weight="800" class="f-sans">lib/protocol-spec.ts SSOT</text>
+    <text x="662" y="207" fill="#7dd3fc" font-size="10" font-weight="700" class="f-mono">/docs &#183; /docs.txt &#183; /llms.txt</text>
+    <text x="662" y="226" fill="#94a3b8" font-size="9.5" class="f-sans">Zero address or ABI drift across docs</text>
+
+    <!-- Connectors -->
+    <line x1="264" y1="156" x2="312" y2="156" stroke="#38bdf8" stroke-width="2.2" class="h-flow" />
+    <line x1="598" y1="126" x2="646" y2="108" stroke="#34d399" stroke-width="2.2" class="h-flow" />
+    <line x1="598" y1="186" x2="646" y2="204" stroke="#38bdf8" stroke-width="2.2" class="h-flow" />
+
+    <circle r="3.8" fill="#38bdf8">
+      <animateMotion dur="1.6s" repeatCount="indefinite" path="M 264 156 L 312 156" />
+    </circle>
+    <circle r="3.8" fill="#34d399">
+      <animateMotion dur="1.6s" begin="0.5s" repeatCount="indefinite" path="M 598 126 L 646 108" />
+    </circle>
+
+    <text x="460" y="274" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-weight="600" class="f-sans">Deduplicated by transaction hash and logIndex across wallet transfers, vaults, DailyGM, and ANS</text>
+  </g>
+  <rect x="0.75" y="0.75" width="918.5" height="298.5" rx="19.25" fill="none" stroke="#1e293b" stroke-width="1.5" />
+</svg>

@@ -1,5 +1,5 @@
 {
-  "name": "arcbank-app",
+  "name": "nexio-app",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,8 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "compile": "hardhat compile",
-    "deploy:mainnet": "hardhat run scripts/deploy_mainnet.ts --network arc_mainnet"
+    "deploy:mainnet": "hardhat run scripts/deploy_mainnet.ts --network arc_mainnet",
+    "deploy:upgrades": "hardhat run scripts/deploy_upgrades.ts --network arc_mainnet"
   },
   "dependencies": {
     "@yudiel/react-qr-scanner": "^2.6.0",

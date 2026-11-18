@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { isRequestAbort, parseQuoteBody, parseSwapBody, postAchswap, postAchswapQuote, withProtocolFee } from "@/lib/achswap-server";
+import {
+  checkAchswapRateLimit,
+  isPartnerFeeRejection,
+  isRequestAbort,
+  parseQuoteBody,
+  parseSwapBody,
+  postAchswapQuote,
+  postAchswapSwap,
+  withProtocolFee,
+} from "@/lib/achswap-server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,8 +20,27 @@ export async function POST(
   const { action } = await params;
   if (action !== "quote" && action !== "swap") {
     return NextResponse.json(
-      { error: { code: "NOT_FOUND", message: "Unknown Achswap path." } },
+      { error: { code: "NOT_FOUND", message: "Unknown swap routing path." } },
       { status: 404, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  const rateCheck = checkAchswapRateLimit(request);
+  if (!rateCheck.ok) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "RATE_LIMITED",
+          message: "Rate limit exceeded. Wait a moment and try again.",
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          "Cache-Control": "no-store",
+          "Retry-After": String(rateCheck.retryAfterSeconds),
+        },
+      }
     );
   }
 
@@ -26,29 +54,57 @@ export async function POST(
     );
   }
 
-  const parsed = action === "quote" ? parseQuoteBody(input) : parseSwapBody(input);
-  if (!parsed.ok) {
+  if (action === "quote") {
+    const parsed = parseQuoteBody(input);
+    if (!parsed.ok) {
+      return NextResponse.json(
+        { error: { code: "INVALID_REQUEST", message: parsed.message } },
+        { status: 400, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+
+    try {
+      const priced = await withProtocolFee(parsed.value);
+      let result = await postAchswapQuote(priced, request.signal);
+      if (priced.feeBps > 0 && isPartnerFeeRejection(result)) {
+        const fallback = { ...priced, feeBps: 0 as const };
+        delete fallback.feeRecipient;
+        result = await postAchswapQuote(fallback, request.signal);
+      }
+      return NextResponse.json(result.body, {
+        status: result.status,
+        headers: { "Cache-Control": "no-store" },
+      });
+    } catch (error) {
+      if (isRequestAbort(error)) return new NextResponse(null, { status: 499 });
+      console.error("Swap quote proxy error:", error);
+      return NextResponse.json(
+        { error: { code: "UNAVAILABLE", message: "Could not reach swap routing service. Try again." } },
+        { status: 502, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+  }
+
+  const parsedSwap = parseSwapBody(input);
+  if (!parsedSwap.ok) {
     return NextResponse.json(
-      { error: { code: "INVALID_REQUEST", message: parsed.message } },
+      { error: { code: "INVALID_REQUEST", message: parsedSwap.message } },
       { status: 400, headers: { "Cache-Control": "no-store" } }
     );
   }
 
   try {
-    const priced = await withProtocolFee(parsed.value);
-    const swapFields = parsed.value as { sender?: string; recipient?: string };
-    const upstream = swapFields.sender && swapFields.recipient
-      ? { ...priced, sender: swapFields.sender, recipient: swapFields.recipient }
-      : priced;
-    let result = action === "quote"
-      ? await postAchswapQuote(upstream, request.signal)
-      : await postAchswap("swap", upstream, request.signal);
-    if ((result.status === 400 || result.status === 422) && upstream.feeBps > 0) {
+    const priced = await withProtocolFee(parsedSwap.value);
+    const upstream = {
+      ...priced,
+      sender: parsedSwap.value.sender,
+      recipient: parsedSwap.value.recipient,
+    };
+    let result = await postAchswapSwap(upstream, request.signal);
+    if (upstream.feeBps > 0 && isPartnerFeeRejection(result)) {
       const fallback = { ...upstream, feeBps: 0 as const };
       delete fallback.feeRecipient;
-      result = action === "quote"
-        ? await postAchswapQuote(fallback, request.signal)
-        : await postAchswap("swap", fallback, request.signal);
+      result = await postAchswapSwap(fallback, request.signal);
     }
     return NextResponse.json(result.body, {
       status: result.status,
@@ -56,9 +112,9 @@ export async function POST(
     });
   } catch (error) {
     if (isRequestAbort(error)) return new NextResponse(null, { status: 499 });
-    console.error("Achswap proxy error:", error);
+    console.error("Swap execution proxy error:", error);
     return NextResponse.json(
-      { error: { code: "UNAVAILABLE", message: "Could not reach Achswap. Try again." } },
+      { error: { code: "UNAVAILABLE", message: "Could not reach swap routing service. Try again." } },
       { status: 502, headers: { "Cache-Control": "no-store" } }
     );
   }

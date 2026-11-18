@@ -1,20 +1,12 @@
 import type { Metadata } from "next";
-import Documentation from "@/components/docs/Documentation";
+import { DocsPortalStandalone } from "@/components/docs/Documentation";
 
 export const metadata: Metadata = {
-  title: "Nexio | Arc Mainnet",
-  description: "Nexio documentation for Arc Mainnet, Achswap quotes, .nex names, vaults, and Daily GM tiers.",
+  title: "Documentation | Nexio Protocol on Arc Mainnet",
+  description:
+    "Developer and architecture portal for Nexio Protocol on Arc Mainnet (Chain ID 5042 / 0x13b2): dual-decimal USDC state, pure two-sided market spot, automated 10 NLP / $100 / 24h vaults with on-chain claimNLP(), consecutive 3-tier Daily GM, and permanent .nex identity recovery.",
 };
 
 export default function DocsPage() {
-  return (
-    <main className="min-h-screen bg-[#020617] px-4 py-10 text-white md:px-10">
-      <div className="mx-auto max-w-5xl">
-        <a href="/" className="text-sm font-bold text-cyan-300">Nexio</a>
-        <div className="mt-6">
-          <Documentation />
-        </div>
-      </div>
-    </main>
-  );
+  return <DocsPortalStandalone />;
 }

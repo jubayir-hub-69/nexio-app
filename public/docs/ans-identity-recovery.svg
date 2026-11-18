@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 300" width="920" height="300" role="img" aria-labelledby="ans-title ans-desc">
+  <title id="ans-title">Permanent .nex Identity and Wallet-Only On-Chain Recovery</title>
+  <desc id="ans-desc">Strict 1 wallet equals 1 permanent .nex domain on Nex Name Service (0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7), revert-safe pre-checks, and stateless wallet-only recovery into Nexio Pass on Arc Mainnet 5042.</desc>
+  <defs>
+    <linearGradient id="bg-ans" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#060d1a" />
+      <stop offset="100%" stop-color="#081c2e" />
+    </linearGradient>
+    <linearGradient id="pass-sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1e3c" />
+      <stop offset="50%" stop-color="#0d2f4f" />
+      <stop offset="100%" stop-color="#072a36" />
+    </linearGradient>
+    <pattern id="grid-ans" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#1e293b" stroke-width="0.7" stroke-opacity="0.45" />
+    </pattern>
+    <clipPath id="clip-ans">
+      <rect x="0" y="0" width="920" height="300" rx="20" />
+    </clipPath>
+  </defs>
+  <style>
+    .f-sans { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .f-mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
+    @keyframes ans-dash { to { stroke-dashoffset: -36; } }
+    @keyframes seal-spin { to { transform: rotate(360deg); } }
+    .ans-flow { stroke-dasharray: 6 6; animation: ans-dash 1.4s linear infinite; }
+    .seal-ring { transform-box: fill-box; transform-origin: center; animation: seal-spin 16s linear infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .ans-flow, .seal-ring { animation: none !important; }
+    }
+  </style>
+
+  <g clip-path="url(#clip-ans)">
+    <rect width="920" height="300" fill="url(#bg-ans)" />
+    <rect width="920" height="300" fill="url(#grid-ans)" />
+
+    <text x="32" y="34" fill="#94a3b8" font-size="10" font-weight="800" letter-spacing="1.6" class="f-sans">PERMANENT .NEX IDENTITY &amp; STATELESS WALLET-ONLY RECOVERY</text>
+    <rect x="652" y="18" width="236" height="22" rx="11" fill="#072235" stroke="#0284c7" />
+    <text x="770" y="33" text-anchor="middle" fill="#7dd3fc" font-size="9.5" font-weight="800" class="f-mono">ANS: 0xE3FdB021...475Ed7</text>
+
+    <!-- Left: Wallet Invariant Card -->
+    <rect x="32" y="68" width="222" height="176" rx="14" fill="#081629" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="1.4" />
+    <text x="48" y="94" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">Wallet Identity Invariant</text>
+    <text x="48" y="112" fill="#7dd3fc" font-size="10" font-weight="700" class="f-mono">1 Wallet = 1 .nex Domain</text>
+    <rect x="46" y="126" width="194" height="48" rx="8" fill="#050d1a" stroke="#1e293b" />
+    <text x="56" y="145" fill="#e2e8f0" font-size="10" font-weight="700" class="f-sans">Immutable Binding</text>
+    <text x="56" y="161" fill="#94a3b8" font-size="9.5" class="f-mono">No expiry &#183; No overwrite</text>
+    <rect x="46" y="182" width="194" height="48" rx="8" fill="#050d1a" stroke="#1e293b" />
+    <text x="56" y="201" fill="#6ee7b7" font-size="10" font-weight="700" class="f-sans">Strict Input Sanitizer</text>
+    <text x="56" y="217" fill="#94a3b8" font-size="9.5" class="f-mono">[a-z0-9-] &#183; Rejects .eth/.arc</text>
+
+    <!-- Center: Revert-Safe Bidirectional Registry -->
+    <rect x="306" y="68" width="286" height="176" rx="14" fill="#08192f" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="1.4" />
+    <text x="324" y="94" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">Nex Name Service Pre-Check Gates</text>
+    <text x="324" y="111" fill="#94a3b8" font-size="9.5" class="f-sans">Prevents on-chain revert on unregistered queries</text>
+
+    <rect x="322" y="124" width="254" height="50" rx="9" fill="#050d1a" stroke="#0284c7" stroke-opacity="0.5" />
+    <text x="334" y="143" fill="#7dd3fc" font-size="10" font-weight="800" class="f-mono">1. hasDomain(wallet) == true</text>
+    <text x="334" y="160" fill="#cbd5e1" font-size="9.5" class="f-mono">&#8594; resolveByAddress(wallet) &#8594; "founder"</text>
+
+    <rect x="322" y="182" width="254" height="50" rx="9" fill="#051715" stroke="#059669" stroke-opacity="0.5" />
+    <text x="334" y="201" fill="#6ee7b7" font-size="10" font-weight="800" class="f-mono">2. !isAvailable("founder")</text>
+    <text x="334" y="218" fill="#cbd5e1" font-size="9.5" class="f-mono">&#8594; resolve("founder") == wallet &#10003;</text>
+
+    <!-- Right: Recovered Holographic Nexio Pass -->
+    <rect x="644" y="68" width="244" height="176" rx="16" fill="url(#pass-sheen)" stroke="#34d399" stroke-opacity="0.75" stroke-width="1.5" />
+    <text x="662" y="94" fill="#f8fafc" font-size="12" font-weight="900" letter-spacing="1.4" class="f-sans">NEXIO PASS</text>
+    <g transform="translate(856, 90)">
+      <circle cx="0" cy="0" r="14" fill="none" stroke="#34d399" stroke-width="1.3" stroke-dasharray="3 3" class="seal-ring" />
+      <path d="M -4.5 0.5 L -1.2 3.8 L 5.2 -3.2" fill="none" stroke="#6ee7b7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    </g>
+
+    <text x="662" y="128" fill="#7dd3fc" font-size="9" font-weight="800" letter-spacing="1.5" class="f-sans">ON-CHAIN WEB3 IDENTITY</text>
+    <text x="662" y="154" fill="#ffffff" font-size="22" font-weight="900" class="f-sans">founder.nex</text>
+    <rect x="662" y="166" width="136" height="22" rx="6" fill="#040b14" stroke="#1e293b" />
+    <text x="672" y="181" fill="#cbd5e1" font-size="10" font-weight="700" class="f-mono">0x9AFe...d372</text>
+
+    <line x1="662" y1="202" x2="870" y2="202" stroke="#ffffff" stroke-opacity="0.12" />
+    <text x="662" y="218" fill="#94a3b8" font-size="8.5" font-weight="700" class="f-sans">NETWORK</text>
+    <text x="662" y="233" fill="#22d3ee" font-size="10.5" font-weight="900" class="f-mono">ARC MAINNET &#183; 5042</text>
+    <text x="792" y="218" fill="#94a3b8" font-size="8.5" font-weight="700" class="f-sans">RECOVERY</text>
+    <text x="792" y="233" fill="#6ee7b7" font-size="10.5" font-weight="900" class="f-mono">CHAIN-NATIVE</text>
+
+    <!-- Bidirectional Flow Lines -->
+    <line x1="254" y1="142" x2="306" y2="142" stroke="#38bdf8" stroke-width="2" class="ans-flow" />
+    <line x1="306" y1="170" x2="254" y2="170" stroke="#34d399" stroke-width="2" class="ans-flow" />
+    <line x1="592" y1="156" x2="644" y2="156" stroke="#34d399" stroke-width="2.2" class="ans-flow" />
+
+    <circle r="3.8" fill="#38bdf8">
+      <animateMotion dur="1.7s" repeatCount="indefinite" path="M 254 142 L 306 142" />
+    </circle>
+    <circle r="3.8" fill="#34d399">
+      <animateMotion dur="1.7s" begin="0.5s" repeatCount="indefinite" path="M 592 156 L 644 156" />
+    </circle>
+
+    <text x="460" y="274" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-weight="600" class="f-sans">Recovers bound .nex identity on any new browser or device from wallet address alone</text>
+  </g>
+  <rect x="0.75" y="0.75" width="918.5" height="298.5" rx="19.25" fill="none" stroke="#1e293b" stroke-width="1.5" />
+</svg>

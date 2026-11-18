@@ -42,7 +42,7 @@ async function main() {
 
   const signers = await ethers.getSigners();
   if (signers.length === 0) {
-    throw new Error("No deployer account. Set PRIVATE_KEY in the gitignored .env file.");
+    throw new Error("No deployer account. Set PRIVATE_KEY in the gitignored .env.hardhat file.");
   }
   const deployer = signers[0];
   const balance = await ethers.provider.getBalance(deployer.address);

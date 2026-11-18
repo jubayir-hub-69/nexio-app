@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 300" width="920" height="300" role="img" aria-labelledby="vault-title vault-desc">
+  <title id="vault-title">Automated Yield Vaults and Exact 1e18 NLP Accrual Engine</title>
+  <desc id="vault-desc">100 USDC or EURC staked for 86,400 seconds accrues exact 10.00 NLP in 18-decimal precision and settles on-chain via claimNLP() while preserving 1:1 instant principal withdrawal.</desc>
+  <defs>
+    <linearGradient id="bg-vault" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#060d1a" />
+      <stop offset="60%" stop-color="#07192b" />
+      <stop offset="100%" stop-color="#05211c" />
+    </linearGradient>
+    <linearGradient id="nlp-bar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#0284c7" />
+      <stop offset="55%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#34d399" />
+    </linearGradient>
+    <pattern id="grid-vault" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M 24 0 L 0 0 0 24" fill="none" stroke="#1e293b" stroke-width="0.7" stroke-opacity="0.45" />
+    </pattern>
+    <clipPath id="clip-vault">
+      <rect x="0" y="0" width="920" height="300" rx="20" />
+    </clipPath>
+  </defs>
+  <style>
+    .f-sans { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .f-mono { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-variant-numeric: tabular-nums; }
+    @keyframes dash-v { to { stroke-dashoffset: -36; } }
+    @keyframes meter-fill { 0% { transform: scaleX(0.22); } 50% { transform: scaleX(1); } 100% { transform: scaleX(0.22); } }
+    .v-flow { stroke-dasharray: 6 6; animation: dash-v 1.3s linear infinite; }
+    .nlp-fill { transform-box: fill-box; transform-origin: left center; animation: meter-fill 5s ease-in-out infinite; }
+    @media (prefers-reduced-motion: reduce) {
+      .v-flow, .nlp-fill { animation: none !important; }
+    }
+  </style>
+
+  <g clip-path="url(#clip-vault)">
+    <rect width="920" height="300" fill="url(#bg-vault)" />
+    <rect width="920" height="300" fill="url(#grid-vault)" />
+
+    <text x="32" y="34" fill="#94a3b8" font-size="10" font-weight="800" letter-spacing="1.6" class="f-sans">AUTOMATED YIELD VAULTS &amp; EXACT 1E18 NLP ENGINE</text>
+    <rect x="650" y="18" width="238" height="22" rx="11" fill="#062922" stroke="#10b981" />
+    <text x="769" y="33" text-anchor="middle" fill="#6ee7b7" font-size="9.5" font-weight="800" class="f-mono">$100 STAKED &#215; 24H = 10.00 NLP</text>
+
+    <!-- Left Card: 1:1 Principal Vaults -->
+    <rect x="32" y="66" width="224" height="178" rx="14" fill="#081629" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="1.4" />
+    <text x="48" y="92" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">1:1 Principal Vaults</text>
+    <text x="48" y="109" fill="#94a3b8" font-size="10" class="f-sans">Zero Lockup &#183; Instant Withdraw</text>
+
+    <rect x="46" y="122" width="196" height="48" rx="9" fill="#050d1a" stroke="#0284c7" stroke-opacity="0.5" />
+    <text x="58" y="141" fill="#7dd3fc" font-size="10.5" font-weight="800" class="f-mono">NexioUSDCVault (6-dec)</text>
+    <text x="58" y="157" fill="#cbd5e1" font-size="9.5" class="f-mono">deposit(amount) / withdraw()</text>
+
+    <rect x="46" y="180" width="196" height="48" rx="9" fill="#051715" stroke="#059669" stroke-opacity="0.5" />
+    <text x="58" y="199" fill="#6ee7b7" font-size="10.5" font-weight="800" class="f-mono">NexioEURCVault (6-dec)</text>
+    <text x="58" y="215" fill="#cbd5e1" font-size="9.5" class="f-mono">SafeERC20 &#183; NonReentrant</text>
+
+    <!-- Center Card: Continuous 1e18 NLP Accumulator -->
+    <rect x="308" y="66" width="304" height="178" rx="14" fill="#071b2c" stroke="#34d399" stroke-opacity="0.65" stroke-width="1.4" />
+    <text x="326" y="92" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">Continuous Second-by-Second Accrual</text>
+    <text x="326" y="110" fill="#7dd3fc" font-size="10" font-weight="700" class="f-mono">pending = (staked6 &#215; &#916;t &#215; 10&#185;&#8312;) / (864,000 &#215; 10&#8310;)</text>
+
+    <rect x="326" y="124" width="268" height="62" rx="10" fill="#040d18" stroke="#1e293b" />
+    <text x="340" y="145" fill="#94a3b8" font-size="10" font-weight="700" class="f-sans">BENCHMARK RATE (86,400 SECONDS)</text>
+    <text x="340" y="166" fill="#f8fafc" font-size="13.5" font-weight="900" class="f-mono">100.00 USDC/EURC &#8594; +10.0000 NLP</text>
+
+    <rect x="326" y="200" width="268" height="12" rx="6" fill="#0f172a" />
+    <rect x="326" y="200" width="268" height="12" rx="6" fill="url(#nlp-bar)" class="nlp-fill" />
+    <text x="326" y="230" fill="#94a3b8" font-size="9.5" font-weight="700" class="f-mono">Sub-second precision &#183; Zero integer hour truncation</text>
+
+    <!-- Right Card: On-Chain claimNLP() Settlement -->
+    <rect x="664" y="66" width="224" height="178" rx="14" fill="#06211c" stroke="#10b981" stroke-opacity="0.7" stroke-width="1.4" />
+    <text x="680" y="92" fill="#f8fafc" font-size="13" font-weight="800" class="f-sans">On-Chain Settlement</text>
+    <text x="680" y="109" fill="#6ee7b7" font-size="10.5" font-weight="800" class="f-mono">vault.claimNLP()</text>
+
+    <rect x="678" y="122" width="196" height="52" rx="9" fill="#041512" stroke="#059669" stroke-opacity="0.55" />
+    <text x="690" y="141" fill="#ecfdf5" font-size="10" font-weight="800" class="f-mono">claimedNLP[user] += pts</text>
+    <text x="690" y="158" fill="#a7f3d0" font-size="9.5" class="f-mono">emit NLPClaimed(user, pts)</text>
+
+    <rect x="678" y="184" width="196" height="44" rx="9" fill="#041512" stroke="#1e293b" />
+    <text x="690" y="203" fill="#7dd3fc" font-size="10" font-weight="800" class="f-sans">Indexed by eth_getLogs</text>
+    <text x="690" y="218" fill="#94a3b8" font-size="9.5" class="f-mono">Permanent Arc L1 Receipt</text>
+
+    <!-- Connectors & Animated Packets -->
+    <line x1="256" y1="155" x2="308" y2="155" stroke="#38bdf8" stroke-width="2.2" class="v-flow" />
+    <line x1="612" y1="155" x2="664" y2="155" stroke="#34d399" stroke-width="2.2" class="v-flow" />
+    <circle r="4" fill="#38bdf8">
+      <animateMotion dur="1.6s" repeatCount="indefinite" path="M 256 155 L 308 155" />
+    </circle>
+    <circle r="4" fill="#34d399">
+      <animateMotion dur="1.6s" begin="0.5s" repeatCount="indefinite" path="M 612 155 L 664 155" />
+    </circle>
+
+    <text x="460" y="274" text-anchor="middle" fill="#94a3b8" font-size="10.5" font-weight="600" class="f-sans">Checkpoint accounting updates accruedNLP before every deposit, withdrawal, and on-chain claimNLP() call</text>
+  </g>
+  <rect x="0.75" y="0.75" width="918.5" height="298.5" rx="19.25" fill="none" stroke="#1e293b" stroke-width="1.5" />
+</svg>

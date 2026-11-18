@@ -7,20 +7,27 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 }
 
+/// @title Nexio Stablecoin Automated Vault & NLP Point Engine
+/// @notice Stakes Arc ERC-20 EURC (6 decimals). 100 units staked for 86,400s accrues exact 10.0 NLP (10e18).
 contract NexioVault {
-    IERC20 public stablecoin;
-    
+    IERC20 public immutable stablecoin;
+
     mapping(address => uint256) public stakedBalance;
     mapping(address => uint256) public lastStakeTime;
-    mapping(address => uint256) public earnedYield;
+    mapping(address => uint256) public accruedPoints;
+    mapping(address => uint256) public claimedPoints;
 
-    uint256 private locked;
+    uint256 private locked = 1;
+
+    event Deposited(address indexed user, uint256 amount, uint256 timestamp);
+    event Withdrawn(address indexed user, uint256 amount, uint256 timestamp);
+    event NLPClaimed(address indexed user, uint256 amount, uint256 totalClaimed, uint256 timestamp);
 
     modifier nonReentrant() {
-        require(locked == 0, "Reentrant");
-        locked = 1;
+        require(locked == 1, "Reentrant");
+        locked = 2;
         _;
-        locked = 0;
+        locked = 1;
     }
 
     constructor(address _tokenAddress) {
@@ -28,41 +35,67 @@ contract NexioVault {
         stablecoin = IERC20(_tokenAddress);
     }
 
-    // Users deposit ERC-20 stablecoins (EURC on Arc uses 6 decimals).
     function deposit(uint256 amount) external nonReentrant {
         require(amount > 0, "Deposit amount must be > 0");
-        
-        _updateYield(msg.sender);
+
+        _updatePoints(msg.sender);
         require(stablecoin.transferFrom(msg.sender, address(this), amount), "Transfer failed. Check allowance.");
-        
+
         stakedBalance[msg.sender] += amount;
+        emit Deposited(msg.sender, amount, block.timestamp);
     }
 
-    // Users withdraw funds
     function withdraw(uint256 amount) external nonReentrant {
         require(amount > 0, "Withdraw amount must be > 0");
         require(stakedBalance[msg.sender] >= amount, "Insufficient balance");
 
-        _updateYield(msg.sender);
+        _updatePoints(msg.sender);
         stakedBalance[msg.sender] -= amount;
-        
+
         require(stablecoin.transfer(msg.sender, amount), "Transfer failed");
+        emit Withdrawn(msg.sender, amount, block.timestamp);
     }
 
-    // Internal function to update yield automatically
-    function _updateYield(address user) internal {
-        if (stakedBalance[user] > 0) {
-            uint256 timeStaked = block.timestamp - lastStakeTime[user];
-            // Yield calculated per hour
-            earnedYield[user] += (stakedBalance[user] * timeStaked) / 3600;
+    function claimNLP() external nonReentrant returns (uint256 claimed18) {
+        _updatePoints(msg.sender);
+        uint256 reward = accruedPoints[msg.sender];
+        require(reward > 0, "No NLP available to claim");
+
+        accruedPoints[msg.sender] = 0;
+        claimedPoints[msg.sender] += reward;
+
+        emit NLPClaimed(msg.sender, reward, claimedPoints[msg.sender], block.timestamp);
+        return reward;
+    }
+
+    function _updatePoints(address user) internal {
+        uint256 last = lastStakeTime[user];
+        if (stakedBalance[user] > 0 && last > 0 && block.timestamp > last) {
+            uint256 elapsed = block.timestamp - last;
+            accruedPoints[user] += (stakedBalance[user] * 1e12 * elapsed) / 864000;
         }
         lastStakeTime[user] = block.timestamp;
     }
 
-    // View function for frontend dashboard display
+    function getPendingNLP(address user) public view returns (uint256) {
+        uint256 pending = accruedPoints[user];
+        uint256 last = lastStakeTime[user];
+        if (stakedBalance[user] > 0 && last > 0 && block.timestamp > last) {
+            uint256 elapsed = block.timestamp - last;
+            pending += (stakedBalance[user] * 1e12 * elapsed) / 864000;
+        }
+        return pending;
+    }
+
+    function getLifetimeNLP(address user) external view returns (uint256) {
+        return claimedPoints[user] + getPendingNLP(user);
+    }
+
     function getPendingYield(address user) external view returns (uint256) {
-        if (stakedBalance[user] == 0) return earnedYield[user];
-        uint256 timeStaked = block.timestamp - lastStakeTime[user];
-        return earnedYield[user] + ((stakedBalance[user] * timeStaked) / 3600);
+        return getPendingNLP(user) / 1e12;
+    }
+
+    function earnedYield(address user) external view returns (uint256) {
+        return accruedPoints[user] / 1e12;
     }
 }

@@ -8,16 +8,26 @@
   "achswapFactory": "0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530",
   "contracts": {
     "NexNameService": "0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7",
-    "DailyGM": "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31",
-    "NexioVault": "0xb30c9272a28749Ae0B04E1d5977337a570025009",
-    "NexioUSDCVault": "0x045700Cd0D442E65dcB549330580d9981bcbC5E0",
+    "DailyGM": "0x1A85147a0b372A56A2C93515E44d99d062264c54",
+    "NexioVault": "0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7",
+    "NexioUSDCVault": "0x77e46702C82f16D6227686e0ED8882c3cf44e599",
     "NexioSwap": "0xD3504e2118b1c7a52cf44947510633562635ee03"
   },
   "transactions": {
     "NexNameService": "0x26029fb3b4b05c7a8fea159b451918edecef2b58b1cac1acc7a8e917d37f1d7e",
+    "DailyGM": "0x6eb85765b16abaff3884786361ab3aa6c0954e16731edf127c88ee9a79f6c925",
+    "NexioVault": "0x8328d47886ad4844ca1e62864f4ebbe7eb472b8955fb7687a749394b36214aed",
+    "NexioUSDCVault": "0x14a46165848c706191f0ab72640c4c421272894b1fa1786af15e84b8fc3f446c",
+    "NexioSwap": "0xd0257d930ac6c195b60f282a00ccded4bf9100497e8ebcb77bb44addf1bb358c"
+  },
+  "previousContracts": {
+    "DailyGM": "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31",
+    "NexioVault": "0xb30c9272a28749Ae0B04E1d5977337a570025009",
+    "NexioUSDCVault": "0x045700Cd0D442E65dcB549330580d9981bcbC5E0"
+  },
+  "previousTransactions": {
     "DailyGM": "0x9383f42623bae295339d7efb1a3b2050e8195a1149264b070955c135a6b9fbbd",
     "NexioVault": "0x850855974630643415b98e794f1aef113624415d0b86a3a7b43929e4fc4691f0",
-    "NexioUSDCVault": "0x28f71baa7b36a8f27248f34f1a736f4d4ec971bcf4478ac9f97c99ea97522b99",
-    "NexioSwap": "0xd0257d930ac6c195b60f282a00ccded4bf9100497e8ebcb77bb44addf1bb358c"
+    "NexioUSDCVault": "0x28f71baa7b36a8f27248f34f1a736f4d4ec971bcf4478ac9f97c99ea97522b99"
   }
 }
