@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import Image from "next/image";
 import { ethers } from "ethers";
 import type { IDetectedBarcode } from "@yudiel/react-qr-scanner";
-import nexioLogo from "@/public/nexio-logo.png";
+import nexioLogo from "@/public/nexio-logo.jpg";
 import {
   ANS_ABI,
   ANS_CONTRACT_ADDRESS,
@@ -22,7 +22,6 @@ import {
   EURC_DECIMALS,
   EURC_VAULT_ABI,
   EURC_VAULT_ADDRESS,
-  FACTORY_ADDRESS,
   LP_DECIMALS,
   NATIVE_GAS_BUFFER,
   NATIVE_USDC_DECIMALS,
@@ -105,7 +104,6 @@ import {
   DailyGmGauge,
   DomainResolutionBadge,
   ExplorerReceiptDrawer,
-  ExternalLinkIcon,
   HistoryEmptyIcon,
   HoloPassCard,
   LinkIcon,
@@ -130,7 +128,6 @@ import {
   SunIcon,
   SwapFlipButton,
   SwapRouteConduit,
-  TxHeaderStatusPill,
   TxLifecycleStepper,
   VaultPositionMeter,
   exportNexioPassPng,
@@ -358,36 +355,35 @@ const tc = {
     "from-slate-950 via-sky-900 to-sky-700 dark:from-white dark:via-cyan-100 dark:to-cyan-400",
   textDesc: "text-slate-700 dark:text-slate-300",
   textMain: "text-slate-900 dark:text-white",
-  textMuted: "text-slate-600 dark:text-slate-400",
+  textMuted: "text-slate-700 dark:text-slate-400",
   solidCardBg:
     "bg-white border-slate-300 shadow-sm dark:bg-[#071120]/85 dark:border-white/10 dark:backdrop-blur-2xl dark:shadow-[0_24px_60px_-15px_rgba(2,6,23,0.7)]",
   subPanelBg:
     "bg-[#eef2f6] border-slate-300 dark:bg-black/35 dark:border-white/[0.08]",
   segTrackBg:
-    "bg-slate-200/90 border-slate-300 dark:bg-black/40 dark:border-white/[0.08]",
+    "bg-slate-200/95 border-slate-300 dark:bg-black/40 dark:border-white/[0.08]",
   sidebarActive:
     "bg-slate-900 text-white border-slate-900 shadow-sm dark:bg-cyan-500/15 dark:text-cyan-200 dark:border-cyan-400/35",
   sidebarInactive:
-    "bg-transparent text-slate-700 border-transparent hover:bg-slate-200/70 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-white",
+    "bg-transparent text-slate-800 border-transparent hover:bg-slate-200/80 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-white",
   drawerBg: "bg-white border-slate-300 dark:bg-[#050B16] dark:border-white/10",
   cardBg:
-    "border-slate-300 bg-white shadow-sm text-slate-900 hover:border-sky-600/50 dark:border-white/10 dark:bg-gradient-to-b dark:from-[#0A1A38]/65 dark:to-[#060E1E]/85 dark:shadow-2xl dark:text-white dark:hover:border-cyan-400/25",
+    "border-slate-300 bg-white shadow-sm text-slate-900 hover:border-sky-700/50 dark:border-white/10 dark:bg-gradient-to-b dark:from-[#0A1A38]/65 dark:to-[#060E1E]/85 dark:shadow-2xl dark:text-white dark:hover:border-cyan-400/25",
   actionCard:
-    "border-slate-300 bg-white shadow-sm text-slate-900 hover:bg-slate-50 hover:border-sky-600/50 dark:border-white/10 dark:bg-[#0A1931]/60 dark:shadow-lg dark:text-white dark:hover:bg-[#0E2242]/80 dark:hover:border-cyan-400/30",
+    "border-slate-300 bg-white shadow-sm text-slate-900 hover:bg-slate-50 hover:border-sky-700/50 dark:border-white/10 dark:bg-[#0A1931]/60 dark:shadow-lg dark:text-white dark:hover:bg-[#0E2242]/80 dark:hover:border-cyan-400/30",
   modalBg:
     "border-slate-300 bg-white shadow-2xl text-slate-900 dark:border-white/12 dark:bg-[#071326] dark:text-white",
   inputBg:
     "border-slate-300 bg-white text-slate-900 placeholder:text-slate-500 focus:border-sky-700 dark:border-white/12 dark:bg-black/45 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-cyan-400",
   historyCard:
-    "border-slate-300 bg-white hover:border-sky-600/50 hover:bg-slate-50/90 text-slate-900 dark:border-white/[0.08] dark:bg-[#09162B]/65 dark:hover:border-cyan-400/25 dark:hover:bg-[#0B1B35] dark:text-white",
+    "border-slate-300 bg-white hover:border-sky-700/50 hover:bg-slate-50/90 text-slate-900 dark:border-white/[0.08] dark:bg-[#09162B]/65 dark:hover:border-cyan-400/25 dark:hover:bg-[#0B1B35] dark:text-white",
   footerBg: "border-slate-300 bg-white/95 dark:border-white/10 dark:bg-[#030814]/85",
   footerIcon:
-    "text-slate-700 border-slate-300 bg-slate-100 hover:text-sky-800 hover:bg-slate-200 dark:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:hover:text-white dark:hover:bg-white/10",
+    "text-slate-800 border-slate-300 bg-slate-100 hover:text-sky-800 hover:bg-slate-200 dark:text-slate-400 dark:border-white/10 dark:bg-white/5 dark:hover:text-white dark:hover:bg-white/10",
 } as const;
 
 export default function Home() {
   // Deterministic SSR + Hydration state (100% byte-for-byte match on hydrateRoot)
-  const [theme, setTheme] = useState<AppTheme>("dark");
   const [selectedTab, setSelectedTab] = useState<TabId>("overview");
 
   const [wallet, setWallet] = useState("");
@@ -404,7 +400,6 @@ export default function Home() {
   const [wusdcBalanceRaw, setWusdcBalanceRaw] = useState<bigint>(ZERO);
   const [balancesLoading, setBalancesLoading] = useState(false);
   const [balancesReady, setBalancesReady] = useState(false);
-  const [networkLatency, setNetworkLatency] = useState(0);
 
   // Transaction Lifecycle & Receipt Drawer
   const [txLifecycle, setTxLifecycle] = useState<TxLifecycleState | null>(null);
@@ -495,7 +490,6 @@ export default function Home() {
   const [swapQuoteRaw, setSwapQuoteRaw] = useState<bigint>(ZERO);
   const [swapQuoteError, setSwapQuoteError] = useState("");
   const [swapMinRaw, setSwapMinRaw] = useState<bigint>(ZERO);
-  const [swapExecutor, setSwapExecutor] = useState("");
   const [swapQuoting, setSwapQuoting] = useState(false);
   const [swapImpactBps, setSwapImpactBps] = useState<number | null>(null);
   const [swapPartnerBps, setSwapPartnerBps] = useState<number | null>(null);
@@ -585,14 +579,13 @@ export default function Home() {
     registeredDomainRef.current = verifiedIdentityDomain;
   }, [verifiedIdentityDomain]);
 
-  // Hydration-safe post-mount sync of theme & URL ?tab= parameter
+  // Hydration-safe post-mount sync of theme attribute & URL ?tab= parameter
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     const syncClientView = () => {
       const currentTheme = readDocumentTheme();
       document.documentElement.dataset.theme = currentTheme;
-      setTheme(currentTheme);
 
       const params = new URLSearchParams(window.location.search);
       setSelectedTab(parseTabParam(params.get("tab")));
@@ -601,7 +594,7 @@ export default function Home() {
     const initId = window.setTimeout(syncClientView, 0);
 
     const onThemeSync = () => {
-      setTheme(readDocumentTheme());
+      document.documentElement.dataset.theme = readDocumentTheme();
     };
     const onPopState = () => {
       const params = new URLSearchParams(window.location.search);
@@ -622,7 +615,7 @@ export default function Home() {
 
   useEffect(() => {
     if (typeof document !== "undefined") {
-      document.title = "Nexio Protocol | Arc Mainnet";
+      document.title = "Nexio Protocol";
     }
   }, [selectedTab]);
 
@@ -660,7 +653,6 @@ export default function Home() {
     } catch {
       // ignore storage errors
     }
-    setTheme(next);
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("nexio-theme"));
     }
@@ -785,7 +777,6 @@ export default function Home() {
       verifyPassGenRef.current += 1;
       historyGenRef.current += 1;
       autoCheckedPassWalletRef.current = "";
-      setNetworkLatency(0);
       setIsBatchMode(false);
       setSendAddress("");
       setSendAmount("");
@@ -806,7 +797,6 @@ export default function Home() {
       setSwapQuote("");
       setSwapQuoteRaw(ZERO);
       setSwapMinRaw(ZERO);
-      setSwapExecutor("");
       setSwapImpactBps(null);
       setSwapPartnerBps(null);
       setSwapLossBps(null);
@@ -971,7 +961,6 @@ export default function Home() {
           };
         }
         setLiveChainNowSec(effectiveTs);
-        setNetworkLatency(snapshot.latencyMs);
 
         if (snapshot.pairState) {
           setLpPairAddress(snapshot.pairState.pairAddress);
@@ -3008,7 +2997,6 @@ export default function Home() {
     setSwapQuote("");
     setSwapQuoteRaw(ZERO);
     setSwapMinRaw(ZERO);
-    setSwapExecutor("");
     setSwapImpactBps(null);
     setSwapPartnerBps(null);
     setSwapLossBps(null);
@@ -3166,7 +3154,6 @@ export default function Home() {
 
         setSwapQuoteRaw(quoted.amountOut);
         setSwapMinRaw(quoted.minAmountOut);
-        setSwapExecutor(quoted.executor);
         setSwapQuote(formatPretty(quoted.amountOut, swapOutDecimals, 6));
         setSwapImpactBps(quoted.priceImpactBps);
         setSwapPartnerBps(quoted.partnerBps);
@@ -3318,7 +3305,6 @@ export default function Home() {
           setSwapQuoteRaw(candidate.amountOut);
           setSwapMinRaw(candidate.minAmountOut);
           setSwapQuote(formatPretty(candidate.amountOut, swapOutDecimals, 6));
-          setSwapExecutor(candidate.executor);
           setSwapImpactBps(candidate.priceImpactBps);
           setSwapPartnerBps(candidate.partnerBps);
           setTxLifecycle(null);
@@ -4644,10 +4630,7 @@ export default function Home() {
         domain: verifiedIdentityDomain,
         wallet,
         streak,
-        tierName: unlockedTier ? unlockedTier.name : undefined,
-        chainId: ARC_CHAIN_ID,
-        networkLabel: "ARC MAINNET",
-        contractAddress: ANS_CONTRACT_ADDRESS,
+        verified: passVerified,
       });
       showMessage("Nexio Pass PNG exported.");
     } catch {
@@ -4660,35 +4643,10 @@ export default function Home() {
   const shareOnX = () => {
     const appUrl = window.location.origin;
     const text = encodeURIComponent(
-      `Verified my on-chain ${verifiedIdentityDomain || ".nex"} identity on @Nexio_0 (${ARC_NETWORK_LABEL} · 5042).\nEnterprise USDC & EURC banking, automated yield vaults, and permanent ANS naming.\n\n${appUrl}`
+      `Claimed my permanent ${verifiedIdentityDomain || ".nex"} identity on @Nexio_0.\nEnterprise Stablecoin Banking, Automated Yield Vaults & Permanent .nex Identity on Arc Mainnet.\n\n${appUrl}`
     );
     window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
   };
-
-  // Header Explorer Contextual Target
-  const headerExplorerTarget = useMemo(() => {
-    switch (selectedTab) {
-      case "portfolio":
-        return { href: `${ARC_EXPLORER}/address/${USDC_VAULT_ADDRESS}`, label: "USDC Vault" };
-      case "swap":
-        return { href: `${ARC_EXPLORER}/address/${WUSDC_ADDRESS}`, label: "USDC Token" };
-      case "lp":
-        return { href: `${ARC_EXPLORER}/address/${ROUTER_ADDRESS}`, label: "V2 Router" };
-      case "dailygm":
-        return { href: `${ARC_EXPLORER}/address/${DAILY_GM_ADDRESS}`, label: "Daily GM" };
-      case "domains":
-      case "trustpass":
-        return { href: `${ARC_EXPLORER}/address/${ANS_CONTRACT_ADDRESS}`, label: "Name Service" };
-      case "history":
-        return {
-          href: wallet ? `${ARC_EXPLORER}/address/${wallet}` : ARC_EXPLORER,
-          label: wallet ? "Wallet Explorer" : "Arc Explorer",
-        };
-      case "docs":
-      default:
-        return { href: ARC_EXPLORER, label: "Arc Explorer" };
-    }
-  }, [selectedTab, wallet]);
 
   const singleRecipientPreview =
     !isBatchMode && rawRecipientList.length === 1 ? resolvedRecipients[0] : null;
@@ -4774,20 +4732,9 @@ export default function Home() {
                 className={`w-full rounded-2xl border p-4 flex justify-between items-center gap-2 mb-6 ${tc.subPanelBg}`}
               >
                 <span className={`nx-num text-xs font-mono font-bold truncate ${tc.textMuted}`}>
-                  Tx: {registrationHash.slice(0, 8)}...{registrationHash.slice(-6)}
+                  Receipt: {registrationHash.slice(0, 8)}…{registrationHash.slice(-6)}
                 </span>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <CopyButton value={registrationHash} label="Copy" size="xs" />
-                  <a
-                    href={`${ARC_EXPLORER}/tx/${registrationHash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 rounded-lg border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100 dark:bg-cyan-500/12 px-2.5 py-1 text-xs font-bold text-sky-900 dark:text-cyan-300 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition"
-                  >
-                    <span>Explorer</span>
-                    <ExternalLinkIcon size={12} />
-                  </a>
-                </div>
+                <CopyButton value={registrationHash} label="Copy" size="xs" />
               </div>
             )}
 
@@ -5315,7 +5262,7 @@ export default function Home() {
                         {isResolvingRecipient ? (
                           <span className="inline-flex items-center gap-1.5 text-sky-800 dark:text-cyan-300">
                             <RadarSpinner size={12} />
-                            <span>Resolving {rawRecipientList.length} recipients on ANS...</span>
+                            <span>Resolving {rawRecipientList.length} recipients...</span>
                           </span>
                         ) : (() => {
                           const bad = resolvedRecipients.find((r) => !r.valid);
@@ -5598,14 +5545,14 @@ export default function Home() {
         </aside>
       </div>
 
-      {/* Top Sticky Institutional Header (WCAG AAA Light & Dark) */}
+      {/* Ultra-Clean Top Sticky Institutional Header (Logo, Nav, Theme Toggle, Wallet) */}
       <header className="sticky top-0 z-40 border-b border-slate-300 bg-white/95 dark:border-white/10 dark:bg-[#050C1A]/85 backdrop-blur-2xl">
         {chainLocked && (
           <div className="flex flex-col gap-2.5 border-b border-amber-500/40 bg-amber-400 px-4 py-2.5 text-slate-950 sm:flex-row sm:items-center sm:justify-between md:px-8">
             <p className="nx-num text-xs sm:text-sm font-black tracking-tight flex items-center gap-2">
               <AlertTriangleIcon size={16} />
               <span>
-                Wrong network (Chain {chainId}). Transactions remain locked until Arc Mainnet (5042).
+                Wrong network detected. Switch your wallet to Arc Mainnet to continue.
               </span>
             </p>
             <button
@@ -5618,7 +5565,7 @@ export default function Home() {
           </div>
         )}
 
-        <div className="mx-auto flex max-w-[1440px] items-center gap-2.5 px-4 py-3 md:px-6">
+        <div className="mx-auto flex max-w-[1440px] items-center gap-3 px-4 py-3 md:px-6">
           <button
             type="button"
             onClick={() => handleTabSwitch("overview")}
@@ -5630,26 +5577,19 @@ export default function Home() {
               height={36}
               sizes="36px"
               preload
-              alt="Nexio Protocol"
+              alt="Nexio"
               style={{ width: 36, height: 36 }}
-              className="h-9 w-9 rounded-xl object-contain border border-slate-300 dark:border-white/10 bg-[#050B16]"
+              className="h-9 w-9 rounded-xl object-cover border border-slate-300 dark:border-white/15 bg-black shadow-xs"
             />
-            <div className="min-w-0">
-              <div
-                className={`text-base sm:text-lg font-black tracking-tight leading-none ${tc.textMain}`}
-              >
-                Nexio
-              </div>
-              <div className="text-[10px] font-extrabold uppercase tracking-[0.16em] mt-0.5 text-slate-600 dark:text-slate-400">
-                Arc Mainnet
-              </div>
-            </div>
+            <span className={`text-lg font-black tracking-tight leading-none ${tc.textMain}`}>
+              Nexio
+            </span>
           </button>
 
           {/* Full 9-View Desktop Navigation Bar */}
           <nav
             aria-label="Primary sections"
-            className="ml-2 hidden lg:flex items-center gap-0.5 overflow-x-auto rounded-full border border-slate-300 dark:border-white/[0.08] bg-slate-100 dark:bg-white/[0.03] p-1"
+            className="ml-3 hidden lg:flex items-center gap-0.5 overflow-x-auto rounded-full border border-slate-300 dark:border-white/[0.08] bg-slate-100 dark:bg-white/[0.03] p-1"
           >
             {ALL_TABS.map((tab) => {
               const active = selectedTab === tab.id;
@@ -5659,10 +5599,10 @@ export default function Home() {
                   type="button"
                   aria-current={active ? "page" : undefined}
                   onClick={() => handleTabSwitch(tab.id)}
-                  className={`rounded-full px-2.5 py-1.5 text-[11px] tracking-tight whitespace-nowrap transition-all border ${
+                  className={`rounded-full px-3 py-1.5 text-xs tracking-tight whitespace-nowrap transition-all border ${
                     active
                       ? "bg-slate-900 text-white border-slate-900 shadow-sm font-extrabold dark:bg-cyan-500/15 dark:text-cyan-300 dark:border-cyan-400/30"
-                      : "border-transparent text-slate-800 hover:text-slate-950 hover:bg-slate-200/70 font-semibold dark:text-slate-300 dark:hover:text-white dark:hover:bg-white/[0.06]"
+                      : "border-transparent text-slate-900 hover:text-slate-950 hover:bg-slate-200/80 font-bold dark:text-slate-300 dark:hover:text-white dark:hover:bg-white/[0.06]"
                   }`}
                 >
                   {tab.shortLabel}
@@ -5672,65 +5612,45 @@ export default function Home() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2 shrink-0">
-            {txLifecycle && (
-              <TxHeaderStatusPill
-                state={txLifecycle}
-                onClick={() => setReceiptDrawerDismissed(false)}
-              />
-            )}
-
-            {/* Top-Right Network & Pure Spot Ticker Pill */}
-            <div
-              className={`nx-num hidden xl:flex items-center gap-2 rounded-full border px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider ${
-                !wallet || isArcMainnet
-                  ? "bg-slate-100 border-slate-300 text-slate-900 dark:bg-white/[0.05] dark:border-white/10 dark:text-slate-200"
-                  : "bg-amber-100 border-amber-400 text-amber-950 dark:bg-amber-500/10 dark:border-amber-500/40 dark:text-amber-200"
-              }`}
-            >
-              <span
-                className={`h-2 w-2 rounded-full ${
-                  !wallet || isArcMainnet ? "bg-emerald-600 dark:bg-emerald-400" : "bg-amber-600"
-                }`}
-              />
-              <span className="text-sky-800 dark:text-cyan-300">
-                {!wallet || isArcMainnet ? "ARC · 5042" : `Chain ${chainId ?? "—"}`}
-              </span>
-              <span className="text-slate-700 dark:text-slate-400">
-                {networkLatency > 0 ? `${networkLatency}ms` : "RPC"}
-              </span>
-              <span className="text-emerald-800 dark:text-emerald-300">
-                1 EURC = {eurcRateLabel === null ? "…" : `$${eurcRateLabel}`}
-              </span>
-            </div>
-
             {/* Hydration-Safe Dual-Icon Theme Toggle */}
             <button
               type="button"
               onClick={toggleTheme}
               aria-label="Toggle color theme"
-              className="hidden sm:flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-800 hover:bg-slate-100 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/12 transition active:scale-95"
+              className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-900 hover:bg-slate-100 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/12 transition active:scale-95"
             >
               <SunIcon size={16} className="hidden dark:block text-amber-400" />
               <MoonIcon size={16} className="block dark:hidden text-sky-800" />
             </button>
 
             {wallet ? (
-              <button
-                type="button"
-                onClick={() => handleTabSwitch(verifiedIdentityDomain ? "trustpass" : "domains")}
-                title={wallet}
-                className="nx-num inline-flex max-w-[175px] items-center gap-1.5 truncate rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-900 hover:border-sky-600 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:border-cyan-400/40 transition"
-              >
-                {verifiedIdentityDomain && (
-                  <ShieldCheckIcon
-                    size={13}
-                    className="shrink-0 text-emerald-700 dark:text-emerald-400"
-                  />
-                )}
-                <span className="truncate">
-                  {verifiedIdentityDomain || `${wallet.slice(0, 6)}...${wallet.slice(-4)}`}
-                </span>
-              </button>
+              <div className="inline-flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleTabSwitch(verifiedIdentityDomain ? "trustpass" : "domains")}
+                  title={wallet}
+                  className="nx-num inline-flex max-w-[175px] items-center gap-1.5 truncate rounded-full border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-extrabold text-slate-900 hover:border-sky-700 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:border-cyan-400/40 transition"
+                >
+                  {verifiedIdentityDomain && (
+                    <ShieldCheckIcon
+                      size={13}
+                      className="shrink-0 text-sky-600 dark:text-sky-400"
+                    />
+                  )}
+                  <span className="truncate">
+                    {verifiedIdentityDomain || `${wallet.slice(0, 6)}…${wallet.slice(-4)}`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={disconnectWallet}
+                  title="Disconnect wallet"
+                  aria-label="Disconnect wallet"
+                  className="hidden lg:inline-flex items-center rounded-full border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-900 hover:bg-rose-50 hover:text-rose-800 hover:border-rose-400 dark:bg-white/[0.06] dark:border-white/12 dark:text-slate-100 dark:hover:bg-rose-500/15 dark:hover:text-rose-300 dark:hover:border-rose-400/40 transition"
+                >
+                  Disconnect
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -5769,45 +5689,7 @@ export default function Home() {
                 <line x1="4" y1="17" x2="20" y2="17" />
               </svg>
             </button>
-
-            {wallet && (
-              <button
-                type="button"
-                onClick={disconnectWallet}
-                title="Disconnect wallet"
-                aria-label="Disconnect wallet"
-                className="hidden lg:inline-flex items-center rounded-full border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-bold text-slate-900 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 dark:bg-white/[0.06] dark:border-white/12 dark:text-slate-100 dark:hover:bg-rose-500/15 dark:hover:text-rose-300 dark:hover:border-rose-400/40 transition"
-              >
-                Disconnect
-              </button>
-            )}
           </div>
-        </div>
-
-        {/* Compact Telemetry Strip below XL */}
-        <div
-          className={`nx-num flex flex-wrap items-center justify-between gap-2 border-t px-4 py-1.5 text-[10px] font-extrabold uppercase tracking-wider xl:hidden ${
-            !wallet || isArcMainnet
-              ? "border-slate-300 bg-slate-100/90 text-slate-900 dark:border-white/[0.08] dark:bg-transparent dark:text-emerald-200"
-              : "border-amber-300 bg-amber-50 text-amber-950 dark:border-white/[0.08] dark:bg-transparent dark:text-amber-200"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${
-                !wallet || isArcMainnet ? "bg-emerald-600 dark:bg-emerald-400" : "bg-amber-600"
-              }`}
-            />
-            <span className="text-sky-900 dark:text-cyan-300">
-              {!wallet || isArcMainnet ? "Arc Mainnet · 5042" : `Chain ${chainId ?? "—"}`}
-            </span>
-            <span className="text-slate-700 dark:text-slate-400">
-              {networkLatency > 0 ? `${networkLatency}ms` : "RPC"}
-            </span>
-          </div>
-          <span className="text-emerald-800 dark:text-emerald-300">
-            1 EURC = {eurcRateLabel === null ? "…" : `${eurcRateLabel} USDC`}
-          </span>
         </div>
       </header>
 
@@ -5830,38 +5712,27 @@ export default function Home() {
               </p>
             </div>
           ) : (
-            <div className="nx-enter flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <h1 className={`text-2xl font-black tracking-tight sm:text-3xl ${tc.textMain}`}>
-                  {ALL_TABS.find((t) => t.id === selectedTab)?.label ?? "Nexio Protocol"}
-                </h1>
-                <p className={`mt-1 max-w-2xl text-sm ${tc.textMuted}`}>
-                  {selectedTab === "portfolio"
-                    ? "Unified wallet balances, automated yield vaults, LP positions, and pure unskewed EURC spot valuation."
-                    : selectedTab === "swap"
-                      ? "Institutional USDC/EURC routing engine with consecutive Daily GM streak fee discounts."
-                      : selectedTab === "lp"
-                        ? "USDC/EURC V2 pool reserves. Deposits lock above a 5% skew from live market spot; withdrawals stay open."
-                        : selectedTab === "dailygm"
-                          ? "Consecutive 24-hour on-chain check-in (48-hour reset window) unlocking 30D, 90D, and 180D VIP tiers."
-                          : selectedTab === "domains"
-                            ? "Permanent 1-wallet-1-domain .nex registry with forward and reverse on-chain resolution."
-                            : selectedTab === "trustpass"
-                              ? "Cryptographically verified on-chain .nex identity credential for Arc Mainnet."
-                              : selectedTab === "history"
-                                ? "Live verifiable on-chain events indexed directly from Arc Mainnet logs."
-                                : "Technical architecture, contract ABIs, API schemas, and operational guardrails."}
-                </p>
-              </div>
-              <a
-                href={headerExplorerTarget.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex w-fit items-center gap-1.5 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/80 dark:bg-cyan-500/10 px-3.5 py-1.5 text-[11px] font-extrabold uppercase tracking-wider text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition shrink-0"
-              >
-                <span>{headerExplorerTarget.label}</span>
-                <ExternalLinkIcon size={12} />
-              </a>
+            <div className="nx-enter">
+              <h1 className={`text-2xl font-black tracking-tight sm:text-3xl ${tc.textMain}`}>
+                {ALL_TABS.find((t) => t.id === selectedTab)?.label ?? "Nexio Protocol"}
+              </h1>
+              <p className={`mt-1 max-w-2xl text-sm ${tc.textMuted}`}>
+                {selectedTab === "portfolio"
+                  ? "Unified wallet balances, automated yield vaults, liquidity positions, and live market spot valuation."
+                  : selectedTab === "swap"
+                    ? "Institutional USDC/EURC routing engine with consecutive Daily GM streak fee discounts."
+                    : selectedTab === "lp"
+                      ? "USDC/EURC liquidity pool reserves. Deposits lock above a 5% skew from live market spot; withdrawals stay open."
+                      : selectedTab === "dailygm"
+                        ? "Consecutive 24-hour check-ins (48-hour reset window) unlocking 30D, 90D, and 180D VIP protocol tiers."
+                        : selectedTab === "domains"
+                          ? "Permanent 1-wallet-1-domain .nex identity registry with instant forward and reverse lookup."
+                          : selectedTab === "trustpass"
+                            ? "Your permanent .nex identity pass and streak tier membership card."
+                            : selectedTab === "history"
+                              ? "Live verified on-chain activity for your connected wallet."
+                              : "Technical architecture, contract ABIs, API schemas, and operational guardrails."}
+              </p>
             </div>
           )}
 
@@ -6262,9 +6133,7 @@ export default function Home() {
                   )}
 
                 <div className={`nx-num text-[11px] mt-4 text-center font-semibold ${tc.textMuted}`}>
-                  USDC Max reserves 0.005 USDC for gas · Contract{" "}
-                  {(vaultAsset === "USDC" ? USDC_VAULT_ADDRESS : EURC_VAULT_ADDRESS).slice(0, 8)}...
-                  {(vaultAsset === "USDC" ? USDC_VAULT_ADDRESS : EURC_VAULT_ADDRESS).slice(-6)}
+                  USDC Max reserves 0.005 USDC for network gas
                 </div>
               </div>
 
@@ -6273,13 +6142,13 @@ export default function Home() {
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-5">
                   <div>
                     <div className="text-xs font-extrabold uppercase tracking-widest text-sky-800 dark:text-cyan-300 mb-1">
-                      On-Chain Vault Rewards
+                      Automated Vault Rewards
                     </div>
                     <h3 className={`text-xl sm:text-2xl font-black tracking-tight ${tc.textMain}`}>
                       Nexio Loyalty Points (NLP)
                     </h3>
                     <p className={`text-xs sm:text-sm font-medium mt-1 ${tc.textMuted}`}>
-                      Deterministic on-chain accrual settled directly via claimNLP() on Nexio Vault contracts.
+                      Continuous on-chain point accrual across USDC and EURC vaults, claimable directly from your wallet.
                     </p>
                   </div>
 
@@ -6408,7 +6277,7 @@ export default function Home() {
                           Staked USDC
                         </div>
                         <div className={`text-[11px] font-semibold ${tc.textMuted}`}>
-                          NexioUSDCVault
+                          USDC Yield Vault
                         </div>
                       </div>
                     </div>
@@ -6452,7 +6321,7 @@ export default function Home() {
                           Staked EURC
                         </div>
                         <div className={`text-[11px] font-semibold ${tc.textMuted}`}>
-                          NexioEURCVault
+                          EURC Yield Vault
                         </div>
                       </div>
                     </div>
@@ -6707,9 +6576,7 @@ export default function Home() {
                     quoting={swapQuoting}
                     swapping={isSwapping}
                     hasQuote={swapQuoteRaw > ZERO && !swapQuoteError}
-                    executorAddress={swapExecutor || undefined}
                     partnerFeeBps={swapPartnerBps ?? (wallet ? gmProfile.feeBps : null)}
-                    explorerUrl={ARC_EXPLORER}
                   />
 
                   <PriceImpactMeter
@@ -7201,10 +7068,7 @@ export default function Home() {
                     <div className="font-black uppercase tracking-wider text-sky-900 dark:text-cyan-300">
                       Tier 2+ Priority LP Pool Telemetry
                     </div>
-                    <div className={`mt-1.5 font-mono text-[11px] break-all ${tc.textMain}`}>
-                      Pair: {lpPairAddress || "Resolving..."}
-                    </div>
-                    <div className={`mt-1 ${tc.textMuted}`}>
+                    <div className={`mt-1.5 ${tc.textMuted}`}>
                       Reserves: {poolReserveUsdc} USDC / {poolReserveEurc} EURC
                     </div>
                     <div className={`mt-0.5 ${tc.textMuted}`}>
@@ -7213,15 +7077,6 @@ export default function Home() {
                     </div>
                   </div>
                 )}
-
-                <div
-                  className={`nx-num text-[10px] mt-5 text-center font-bold tracking-wider space-y-0.5 ${tc.textMuted}`}
-                >
-                  <div>
-                    Router {ROUTER_ADDRESS.slice(0, 6)}...{ROUTER_ADDRESS.slice(-4)} · Factory{" "}
-                    {FACTORY_ADDRESS.slice(0, 6)}...{FACTORY_ADDRESS.slice(-4)}
-                  </div>
-                </div>
               </div>
             </div>
           )}
@@ -7253,7 +7108,7 @@ export default function Home() {
 
                 <div className="nx-num inline-flex items-center gap-2 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/85 dark:bg-cyan-500/12 px-5 py-2 text-xs sm:text-sm font-black uppercase tracking-wider text-sky-900 dark:text-cyan-300 mb-5">
                   <span>
-                    {streak > 0 ? `${streak} Consecutive Days` : "0 Consecutive Days"} ·{" "}
+                    🔥 {streak} {streak === 1 ? "Day" : "Days"} ·{" "}
                     {unlockedTier ? unlockedTier.name : UNRANKED_GM_PROFILE.name}
                   </span>
                 </div>
@@ -7383,27 +7238,11 @@ export default function Home() {
             <div className={`nx-enter rounded-[2rem] p-6 sm:p-9 border ${tc.solidCardBg}`}>
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-5 mb-7">
                 <div>
-                  <div className="flex flex-wrap items-center gap-2 mb-2">
-                    <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100 dark:bg-cyan-500/12 text-sky-900 dark:text-cyan-300">
-                      Arc Name Service (ANS)
-                    </span>
-                    <a
-                      href={`${ARC_EXPLORER}/address/${ANS_CONTRACT_ADDRESS}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={`nx-num text-xs font-mono font-bold hover:underline inline-flex items-center gap-1 ${tc.textMuted}`}
-                    >
-                      <span>
-                        {ANS_CONTRACT_ADDRESS.slice(0, 6)}...{ANS_CONTRACT_ADDRESS.slice(-4)}
-                      </span>
-                      <ExternalLinkIcon size={12} />
-                    </a>
-                  </div>
                   <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>
                     Nexio Domains (.nex)
                   </h2>
                   <p className={`text-xs sm:text-sm font-medium mt-1 max-w-xl ${tc.textMuted}`}>
-                    Strict 1-Wallet-1-Domain registry. Registered .nex names never expire and cannot be overwritten.
+                    Permanent 1-wallet-1-domain registry. Registered .nex names never expire and cannot be overwritten.
                   </p>
                 </div>
 
@@ -7529,7 +7368,7 @@ export default function Home() {
                   {domainAvailable && !domainValidationMsg && (
                     <div className="nx-enter flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 sm:p-6 rounded-3xl border border-sky-600/35 dark:border-cyan-500/35 bg-sky-50 dark:bg-cyan-500/10">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 rounded-2xl flex items-center justify-center p-1 bg-[#050B16] border border-slate-300 dark:border-cyan-500/30 shrink-0">
+                        <div className="w-12 h-12 rounded-2xl flex items-center justify-center p-0.5 bg-black border border-slate-300 dark:border-cyan-500/30 shrink-0 overflow-hidden">
                           <Image
                             src={nexioLogo}
                             alt="Nexio"
@@ -7537,7 +7376,7 @@ export default function Home() {
                             height={40}
                             sizes="40px"
                             style={{ width: 40, height: 40 }}
-                            className="h-10 w-10 object-contain rounded-xl"
+                            className="h-10 w-10 object-cover rounded-xl"
                           />
                         </div>
                         <div>
@@ -7607,7 +7446,7 @@ export default function Home() {
                           Reverse Lookup (0x Address → .nex)
                         </h3>
                         <p className={`text-xs ${tc.textMuted}`}>
-                          Query any EVM wallet on {ARC_NETWORK_LABEL} via hasDomain and resolveByAddress.
+                          Look up any wallet address to view its permanent .nex identity.
                         </p>
                       </div>
 
@@ -7688,18 +7527,13 @@ export default function Home() {
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-5 pb-3.5 border-b border-slate-300 dark:border-cyan-500/20">
                         <span className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
                           <ShieldCheckIcon size={15} />
-                          <span>Verified On-Chain ANS Binding</span>
-                        </span>
-                        <span
-                          className={`text-[10px] font-bold uppercase tracking-widest ${tc.textMuted}`}
-                        >
-                          Arc Mainnet · 5042
+                          <span>Verified .nex Identity</span>
                         </span>
                       </div>
 
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-5">
                         <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 rounded-2xl flex items-center justify-center p-1 shrink-0 bg-[#050B16] border border-slate-300 dark:border-cyan-500/30">
+                          <div className="w-12 h-12 rounded-2xl flex items-center justify-center p-0.5 shrink-0 bg-black border border-slate-300 dark:border-cyan-500/30 overflow-hidden">
                             <Image
                               src={nexioLogo}
                               alt="Nexio"
@@ -7707,7 +7541,7 @@ export default function Home() {
                               height={40}
                               sizes="40px"
                               style={{ width: 40, height: 40 }}
-                              className="h-10 w-10 object-contain rounded-xl"
+                              className="h-10 w-10 object-cover rounded-xl"
                             />
                           </div>
                           <div>
@@ -7715,7 +7549,7 @@ export default function Home() {
                               {resolvedDomainResult}.nex
                             </div>
                             <div className={`text-xs font-bold mt-0.5 ${tc.textMuted}`}>
-                              Permanent Arc Name Service Record
+                              Permanent .nex Domain Record
                             </div>
                           </div>
                         </div>
@@ -7750,15 +7584,6 @@ export default function Home() {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <CopyButton value={resolvedOwnerAddress} label="Copy" size="xs" />
-                          <a
-                            href={`${ARC_EXPLORER}/address/${resolvedOwnerAddress}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-300 dark:border-white/15 bg-slate-100 dark:bg-white/5 text-slate-900 dark:text-slate-200 hover:border-sky-600 dark:hover:border-cyan-500 transition"
-                          >
-                            <span>Explorer</span>
-                            <ExternalLinkIcon size={12} />
-                          </a>
                         </div>
                       </div>
                     </div>
@@ -7774,7 +7599,7 @@ export default function Home() {
                         />
                         <div className="flex-1">
                           <h4 className="font-black text-sm sm:text-base mb-1">
-                            ANS Lookup Notice
+                            Domain Lookup
                           </h4>
                           <p className="text-xs sm:text-sm font-medium opacity-95 mb-3">
                             {resolvedAddressError}
@@ -7804,7 +7629,7 @@ export default function Home() {
                       On-Chain Identity Recovery
                     </div>
                     <p className={`mt-1.5 text-xs sm:text-sm font-medium ${tc.textMuted}`}>
-                      Queries hasDomain(wallet) and resolveByAddress(wallet) directly on Arc Mainnet to restore your .nex identity across any browser or device without relying on local cache.
+                      Restore your permanent .nex domain directly from your connected wallet address across any browser or device without relying on local storage.
                     </p>
                     <div className="nx-num mt-4 rounded-2xl border border-slate-300 dark:border-white/10 bg-white dark:bg-black/30 p-3.5 font-mono text-xs sm:text-sm">
                       <div className="break-all text-slate-700 dark:text-slate-400">
@@ -7824,7 +7649,7 @@ export default function Home() {
                         {isRecoveringDomain ? (
                           <>
                             <RadarSpinner size={14} />
-                            <span>Recovering from ANS...</span>
+                            <span>Recovering Identity...</span>
                           </>
                         ) : (
                           <>
@@ -7852,7 +7677,7 @@ export default function Home() {
           )}
 
           {/* ================================================================
-           * TAB 7: NEXIO PASS (3D HOLOGRAPHIC CARD — ARC MAINNET · 5042)
+           * TAB 7: NEXIO PASS (PREMIUM FINTECH BANK CARD)
            * ============================================================== */}
           {selectedTab === "trustpass" && (
             <div
@@ -7862,19 +7687,14 @@ export default function Home() {
                 <div className="text-center z-10 max-w-md px-4 flex flex-col items-center">
                   <OnChainSeal status="querying" size={64} className="mb-5" />
                   <h2 className={`text-2xl font-black mb-2 ${tc.textMain}`}>
-                    Verifying On-Chain Identity
+                    Verifying Identity
                   </h2>
                   <p className={`text-xs sm:text-sm font-medium mb-4 ${tc.textMuted}`}>
-                    Querying resolveByAddress on Arc Name Service:
+                    Checking your permanent .nex identity on-chain...
                   </p>
-                  <div
-                    className={`nx-num text-xs font-mono font-bold px-3.5 py-2 rounded-xl border mb-4 break-all ${tc.subPanelBg}`}
-                  >
-                    {ANS_CONTRACT_ADDRESS}
-                  </div>
                   <div className="inline-flex items-center gap-2 text-xs font-bold text-sky-800 dark:text-cyan-300">
                     <RadarSpinner size={14} />
-                    <span>Reading Arc Mainnet state...</span>
+                    <span>Syncing membership pass...</span>
                   </div>
                 </div>
               ) : !verifiedIdentityDomain ? (
@@ -7884,7 +7704,7 @@ export default function Home() {
                     Unlock Your Nexio Pass
                   </h2>
                   <p className={`text-sm sm:text-base mb-7 ${tc.textMuted}`}>
-                    Register a permanent .nex domain on Arc Name Service (or recover an existing on-chain binding) to mint your verified Arc Mainnet identity credential.
+                    Register your permanent .nex domain or sync an existing wallet binding to activate your Nexio Pass.
                   </p>
 
                   <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
@@ -7896,7 +7716,7 @@ export default function Home() {
                         className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-full font-black text-xs sm:text-sm border border-sky-600/40 dark:border-cyan-500/40 bg-sky-100/85 dark:bg-cyan-500/10 text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition"
                       >
                         <RefreshCwIcon size={15} />
-                        <span>Verify from Smart Contract</span>
+                        <span>Sync On-Chain Identity</span>
                       </button>
                     ) : (
                       <button
@@ -7924,32 +7744,14 @@ export default function Home() {
                       Register .nex Domain
                     </button>
                   </div>
-
-                  <div className={`nx-num mt-7 text-[11px] font-mono font-semibold ${tc.textMuted}`}>
-                    ANS Registry: {ANS_CONTRACT_ADDRESS.slice(0, 8)}...
-                    {ANS_CONTRACT_ADDRESS.slice(-6)}
-                  </div>
                 </div>
               ) : (
                 <div className="z-10 w-full flex flex-col items-center">
-                  <div className="text-center mb-7">
-                    <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>
-                      Verified Arc Mainnet Credential
-                    </h2>
-                    <p className="nx-num text-xs sm:text-sm font-bold mt-1 text-sky-800 dark:text-cyan-300">
-                      ANS Registry {ANS_CONTRACT_ADDRESS.slice(0, 6)}...
-                      {ANS_CONTRACT_ADDRESS.slice(-4)} · Chain ID 5042
-                    </p>
-                  </div>
-
                   <HoloPassCard
                     domain={verifiedIdentityDomain}
                     wallet={wallet}
                     streak={streak}
-                    tierName={unlockedTier ? unlockedTier.name : undefined}
-                    chainId={ARC_CHAIN_ID}
-                    networkLabel="ARC MAINNET"
-                    contractAddress={ANS_CONTRACT_ADDRESS}
+                    verified={passVerified}
                   />
 
                   <div className="mt-8 flex flex-wrap justify-center gap-3">
@@ -8001,7 +7803,7 @@ export default function Home() {
           )}
 
           {/* ================================================================
-           * TAB 8: LIVE ARC MAINNET TRANSACTION HISTORY
+           * TAB 8: LIVE ON-CHAIN TRANSACTION HISTORY
            * ============================================================== */}
           {selectedTab === "history" && (
             <div className={`nx-enter rounded-[2rem] p-6 sm:p-9 border ${tc.solidCardBg}`}>
@@ -8012,34 +7814,22 @@ export default function Home() {
                   </h2>
                   <p className={`nx-num text-xs sm:text-sm font-medium mt-1 ${tc.textMuted}`}>
                     {historyScannedRange
-                      ? `Indexed Arc Mainnet blocks #${historyScannedRange.from.toLocaleString()} – #${historyScannedRange.to.toLocaleString()}`
-                      : "Live eth_getLogs indexing across USDC, EURC, Vaults, NLP Claims, V2 LP, Daily GM, and ANS."}
+                      ? `Synced blocks #${historyScannedRange.from.toLocaleString()} – #${historyScannedRange.to.toLocaleString()}`
+                      : "Transfers, swaps, yield vaults, NLP claims, liquidity actions, streaks, and .nex registrations."}
                   </p>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {wallet && (
-                    <button
-                      type="button"
-                      onClick={() => void loadOnChainHistory(wallet)}
-                      disabled={historyLoading}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/85 dark:bg-cyan-500/10 px-4 py-2 text-xs font-extrabold text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition disabled:opacity-50"
-                    >
-                      {historyLoading ? <RadarSpinner size={14} /> : <RefreshCwIcon size={14} />}
-                      <span>Refresh</span>
-                    </button>
-                  )}
-
-                  <a
-                    href={wallet ? `${ARC_EXPLORER}/address/${wallet}` : ARC_EXPLORER}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-extrabold transition ${tc.subPanelBg} text-slate-900 dark:text-slate-100 hover:border-sky-600 dark:hover:border-cyan-500/40`}
+                {wallet && (
+                  <button
+                    type="button"
+                    onClick={() => void loadOnChainHistory(wallet)}
+                    disabled={historyLoading}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/85 dark:bg-cyan-500/10 px-4 py-2 text-xs font-extrabold text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition disabled:opacity-50 self-start sm:self-auto"
                   >
-                    <span>Arc Explorer</span>
-                    <ExternalLinkIcon size={13} />
-                  </a>
-                </div>
+                    {historyLoading ? <RadarSpinner size={14} /> : <RefreshCwIcon size={14} />}
+                    <span>Refresh</span>
+                  </button>
+                )}
               </div>
 
               {!wallet ? (
@@ -8204,23 +7994,15 @@ export default function Home() {
                           )}
 
                           <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-xs font-bold text-slate-700 dark:text-slate-300">
+                              {item.txHash.slice(0, 6)}…{item.txHash.slice(-4)}
+                            </span>
                             <CopyButton
                               value={item.txHash}
                               size="xs"
                               variant="ghost"
                               ariaLabel="Copy transaction hash"
                             />
-                            <a
-                              href={item.explorerUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-xs font-bold text-sky-800 dark:text-cyan-300 hover:underline"
-                            >
-                              <span>
-                                {item.txHash.slice(0, 6)}...{item.txHash.slice(-4)}
-                              </span>
-                              <ExternalLinkIcon size={12} />
-                            </a>
                           </div>
                         </div>
                       </div>
@@ -8263,7 +8045,7 @@ export default function Home() {
            * ============================================================== */}
           {selectedTab === "docs" && (
             <div className="nx-enter">
-              <Documentation theme={theme} />
+              <Documentation />
             </div>
           )}
         </div>
@@ -8272,10 +8054,21 @@ export default function Home() {
       {/* Footer */}
       <footer className={`mt-auto border-t py-8 md:py-10 backdrop-blur-2xl ${tc.footerBg}`}>
         <div className="mx-auto flex w-full max-w-4xl flex-col items-center justify-between gap-5 px-6 md:flex-row">
-          <div
-            className={`text-xs font-bold tracking-widest uppercase text-center md:text-left ${tc.textMuted}`}
-          >
-            © 2026 NEXIO PROTOCOL · BUILT ON ARC MAINNET
+          <div className="flex items-center gap-3">
+            <Image
+              src={nexioLogo}
+              width={28}
+              height={28}
+              sizes="28px"
+              alt="Nexio Protocol"
+              style={{ width: 28, height: 28 }}
+              className="h-7 w-7 rounded-lg object-cover border border-slate-300 dark:border-white/15 bg-black shrink-0"
+            />
+            <div
+              className={`text-xs font-bold tracking-widest uppercase text-center md:text-left ${tc.textMuted}`}
+            >
+              © 2026 NEXIO PROTOCOL
+            </div>
           </div>
 
           <div className="flex flex-col items-center gap-3 md:items-end">

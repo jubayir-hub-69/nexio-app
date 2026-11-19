@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
+import Image from "next/image";
 import Link from "next/link";
+import nexioLogo from "@/public/nexio-logo.jpg";
 import {
   CONTRACT_SPECS,
   DOCS_MOTION_SVGS,
@@ -531,10 +533,21 @@ npm run dev`;
       {/* Top Flagship Hero */}
       <section className="rounded-3xl border border-slate-300 bg-gradient-to-br from-sky-50/90 via-white to-slate-50 p-6 shadow-sm md:p-8 dark:border-cyan-400/20 dark:from-[#071426] dark:via-[#07111f] dark:to-[#040a14] dark:shadow-xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-[11px] font-black uppercase tracking-widest text-sky-900 dark:border-cyan-400/30 dark:bg-cyan-500/10 dark:text-cyan-200">
-            <span className="h-2 w-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
-            {NETWORK_SPEC.protocolName} · {NETWORK_SPEC.name} · {NETWORK_SPEC.chainId} ({NETWORK_SPEC.chainIdHex})
-          </span>
+          <div className="flex items-center gap-3">
+            <Image
+              src={nexioLogo}
+              width={40}
+              height={40}
+              sizes="40px"
+              alt="Nexio Protocol"
+              style={{ width: 40, height: 40 }}
+              className="h-10 w-10 rounded-xl object-cover border border-slate-300 dark:border-white/15 bg-black shrink-0"
+            />
+            <span className="inline-flex items-center gap-2 rounded-full border border-sky-300 bg-sky-100 px-3 py-1 text-[11px] font-black uppercase tracking-widest text-sky-900 dark:border-cyan-400/30 dark:bg-cyan-500/10 dark:text-cyan-200">
+              <span className="h-2 w-2 rounded-full bg-emerald-600 dark:bg-emerald-400" />
+              {NETWORK_SPEC.protocolName} · {NETWORK_SPEC.name} · {NETWORK_SPEC.chainId} ({NETWORK_SPEC.chainIdHex})
+            </span>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <a
               href="/docs.txt"
@@ -1049,7 +1062,7 @@ npm run dev`;
                 <MotionGraphicFrame
                   src={DOCS_MOTION_SVGS.identity}
                   alt="Permanent .nex Identity and Sovereign Nexio Pass Recovery animated diagram"
-                  caption="1 Wallet = 1 Permanent .nex Domain: revert-safe isAvailable/hasDomain pre-checks, bidirectional ownership handshake, and local 3x DPI ARC MAINNET · 5042 Pass export."
+                  caption="1 Wallet = 1 Permanent .nex Domain: revert-safe isAvailable/hasDomain pre-checks, bidirectional ownership handshake, and local 3x DPI 1.586:1 fintech Pass card export."
                 />
 
                 <div className="rounded-2xl border border-amber-400 bg-amber-50 p-4 text-xs leading-relaxed text-amber-950 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-50">
@@ -1499,8 +1512,17 @@ export function DocsPortalStandalone() {
           <div className="flex items-center gap-3">
             <Link
               href="/"
-              className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-black text-slate-900 shadow-xs transition hover:border-sky-700 hover:bg-slate-100 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
+              className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-black text-slate-900 shadow-xs transition hover:border-sky-700 hover:bg-slate-100 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
             >
+              <Image
+                src={nexioLogo}
+                width={22}
+                height={22}
+                sizes="22px"
+                alt="Nexio"
+                style={{ width: 22, height: 22 }}
+                className="h-[22px] w-[22px] rounded-md object-cover bg-black"
+              />
               <span aria-hidden="true">←</span>
               <span>Back to Nexio Protocol</span>
             </Link>

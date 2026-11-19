@@ -2,10 +2,9 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import nexioLogo from "@/public/nexio-logo.png";
+import nexioLogo from "@/public/nexio-logo.jpg";
 import {
   AlertTriangleIcon,
-  ExternalLinkIcon,
   LockIcon,
   NexioMarkIcon,
   RadarSpinner,
@@ -487,9 +486,7 @@ export type SwapRouteConduitProps = {
   quoting?: boolean;
   swapping?: boolean;
   hasQuote?: boolean;
-  executorAddress?: string;
   partnerFeeBps?: number | null;
-  explorerUrl?: string;
   theme?: "dark" | "light";
   className?: string;
 };
@@ -500,9 +497,7 @@ export function SwapRouteConduit({
   quoting = false,
   swapping = false,
   hasQuote = false,
-  executorAddress,
   partnerFeeBps,
-  explorerUrl = "https://explorer.arc.io",
   theme,
   className = "",
 }: SwapRouteConduitProps) {
@@ -513,7 +508,7 @@ export function SwapRouteConduit({
       data-theme={theme}
       className={`rounded-2xl border border-slate-300 dark:border-white/[0.08] bg-slate-100 dark:bg-black/30 px-3.5 py-2.5 ${className}`.trim()}
     >
-      <div className="flex items-center justify-between gap-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1.5">
+      <div className="flex items-center justify-between gap-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-400 mb-1.5">
         <span>Nexio Routing Engine</span>
         <span className="nx-num flex items-center gap-1.5">
           {partnerFeeBps !== null && partnerFeeBps !== undefined && (
@@ -521,20 +516,7 @@ export function SwapRouteConduit({
               {partnerFeeBps === 0 ? "0 bps VIP" : `${partnerFeeBps} bps`}
             </span>
           )}
-          {executorAddress ? (
-            <a
-              href={`${explorerUrl.replace(/\/$/, "")}/address/${executorAddress}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Settlement Executor"
-              className="inline-flex items-center gap-1 font-mono text-slate-800 dark:text-slate-300 hover:text-sky-700 dark:hover:text-cyan-300"
-            >
-              <span>{executorAddress.slice(0, 6)}...{executorAddress.slice(-4)}</span>
-              <ExternalLinkIcon size={10} />
-            </a>
-          ) : (
-            <span className="text-slate-700 dark:text-slate-300">Live Market Spot</span>
-          )}
+          <span className="text-slate-800 dark:text-slate-300">Live Market Spot</span>
         </span>
       </div>
 
@@ -1359,21 +1341,81 @@ export type HoloPassCardProps = {
   domain: string;
   wallet: string;
   streak: number;
-  tierName?: string;
-  chainId?: number;
-  networkLabel?: string;
-  contractAddress?: string;
+  verified?: boolean;
   className?: string;
 };
+
+type PassCardVisualTheme = {
+  tierBadge: string;
+  gradientClass: string;
+  borderClass: string;
+  topOrbClass: string;
+  bottomOrbClass: string;
+  pillClass: string;
+  barClass: string;
+  nextTarget: number | null;
+  isVip: boolean;
+};
+
+function getPassCardVisualTheme(streak: number): PassCardVisualTheme {
+  const days = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0;
+  if (days >= 180) {
+    return {
+      tierBadge: "VIP",
+      gradientClass: "from-[#1a1106] via-[#422b0e] to-[#734c16]",
+      borderClass: "border-amber-300/40",
+      topOrbClass: "bg-amber-400/25",
+      bottomOrbClass: "bg-amber-600/20",
+      pillClass: "border-amber-300/45 bg-amber-400/15 text-amber-200",
+      barClass: "from-amber-400 to-amber-500",
+      nextTarget: null,
+      isVip: true,
+    };
+  }
+  if (days >= 90) {
+    return {
+      tierBadge: "TIER 2",
+      gradientClass: "from-[#130829] via-[#2a1359] to-[#431c85]",
+      borderClass: "border-purple-300/35",
+      topOrbClass: "bg-purple-400/25",
+      bottomOrbClass: "bg-indigo-400/20",
+      pillClass: "border-purple-300/40 bg-purple-400/15 text-purple-100",
+      barClass: "from-purple-400 to-indigo-400",
+      nextTarget: 180,
+      isVip: false,
+    };
+  }
+  if (days >= 30) {
+    return {
+      tierBadge: "TIER 1",
+      gradientClass: "from-[#041a1f] via-[#093640] to-[#0d545b]",
+      borderClass: "border-teal-300/35",
+      topOrbClass: "bg-teal-400/25",
+      bottomOrbClass: "bg-emerald-400/20",
+      pillClass: "border-teal-300/40 bg-teal-400/15 text-teal-100",
+      barClass: "from-teal-300 to-emerald-400",
+      nextTarget: 90,
+      isVip: false,
+    };
+  }
+  return {
+    tierBadge: "MEMBER",
+    gradientClass: "from-[#061229] via-[#0c2859] to-[#0b3c82]",
+    borderClass: "border-sky-300/30",
+    topOrbClass: "bg-sky-400/25",
+    bottomOrbClass: "bg-blue-500/20",
+    pillClass: "border-sky-300/35 bg-sky-400/15 text-sky-100",
+    barClass: "from-sky-400 to-blue-400",
+    nextTarget: 30,
+    isVip: false,
+  };
+}
 
 export function HoloPassCard({
   domain,
   wallet,
   streak,
-  tierName,
-  chainId = 5042,
-  networkLabel = "ARC MAINNET",
-  contractAddress,
+  verified = false,
   className = "",
 }: HoloPassCardProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -1416,14 +1458,21 @@ export function HoloPassCard({
     el.style.setProperty("--ry", "0deg");
   }, []);
 
-  const normalizedDomain = domain.trim().toLowerCase().endsWith(".nex")
-    ? domain.trim().toLowerCase()
-    : `${domain.trim().toLowerCase()}.nex`;
-
+  const cleanDomain = (domain || "nexio").trim().toLowerCase();
+  const baseLabel = cleanDomain.endsWith(".nex") ? cleanDomain.slice(0, -4) : cleanDomain;
   const safeStreak = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0;
+  const visual = getPassCardVisualTheme(safeStreak);
+  const progressPct =
+    !visual.isVip && visual.nextTarget !== null
+      ? Math.min(100, Math.max(0, (safeStreak / visual.nextTarget) * 100))
+      : 100;
+  const shortWallet =
+    wallet && wallet.length >= 10
+      ? `${wallet.slice(0, 6)}\u2026${wallet.slice(-4)}`
+      : wallet || "0x0000\u20260000";
 
   return (
-    <div className={`w-full max-w-[460px] [perspective:1100px] ${className}`.trim()}>
+    <div className={`w-full max-w-[476px] [perspective:1100px] ${className}`.trim()}>
       <div
         ref={cardRef}
         id="nexio-pass-card"
@@ -1436,88 +1485,125 @@ export function HoloPassCard({
             ? "transform 130ms ease-out"
             : "transform 480ms cubic-bezier(0.22, 1, 0.36, 1)",
         }}
-        className="nx-pass-tilt relative aspect-[1.58/1] w-full overflow-hidden rounded-2xl sm:rounded-[1.75rem] border border-slate-900/20 dark:border-white/20 bg-gradient-to-br from-[#050B16] via-[#0A1933] to-[#062538] p-5 sm:p-7 text-white shadow-[0_24px_60px_-15px_rgba(15,23,42,0.45),inset_0_1px_0_0_rgba(255,255,255,0.16)] dark:shadow-[0_24px_60px_-15px_rgba(2,6,23,0.75),inset_0_1px_0_0_rgba(255,255,255,0.16)] flex flex-col justify-between select-none"
+        className={`nx-pass-tilt relative aspect-[1.586/1] w-full overflow-hidden rounded-[24px] border bg-gradient-to-br p-5 sm:p-7 text-white shadow-[0_24px_60px_-15px_rgba(15,23,42,0.45),inset_0_1px_0_0_rgba(255,255,255,0.18)] dark:shadow-[0_24px_60px_-15px_rgba(2,6,23,0.78),inset_0_1px_0_0_rgba(255,255,255,0.18)] flex flex-col justify-between select-none ${visual.gradientClass} ${visual.borderClass}`}
       >
         {/* Iridescent Security Foil */}
         <div className="nx-holo-foil" data-active={pointerActive ? "true" : "false"} />
 
-        {/* Subtle Top-Right Ambient Glow */}
+        {/* Subtle Tier-Matched Ambient Orbs */}
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full bg-cyan-500/20 blur-2xl"
+          className={`pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full blur-2xl ${visual.topOrbClass}`}
+        />
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute -left-10 -bottom-12 h-36 w-36 rounded-full blur-2xl ${visual.bottomOrbClass}`}
         />
 
-        {/* Top Header */}
-        <div className="relative z-10 flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-cyan-400/35 bg-[#040913] p-1 shadow-[0_0_16px_rgba(6,182,212,0.28)]">
+        {/* Top Header: Official Logo + Minimal Tier Badge */}
+        <div className="relative z-10 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/20 bg-black p-0.5 shadow-sm">
               {!logoError ? (
                 <Image
                   src={nexioLogo}
                   alt="Nexio"
-                  width={32}
-                  height={32}
-                  sizes="32px"
+                  width={36}
+                  height={36}
+                  sizes="36px"
                   onError={() => setLogoError(true)}
-                  style={{ width: "100%", height: "100%", objectFit: "contain" }}
-                  className="rounded-lg"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  className="rounded-[9px]"
                 />
               ) : (
-                <NexioMarkIcon size={26} />
+                <NexioMarkIcon size={24} />
               )}
             </div>
-            <span className="text-sm sm:text-lg font-black uppercase tracking-[0.16em] text-white">
-              NEXIO PASS
+            <span className="text-sm sm:text-base font-black uppercase tracking-[0.22em] text-white/95">
+              NEXIO
             </span>
           </div>
 
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-widest text-emerald-300">
-            <ShieldCheckIcon size={13} className="text-emerald-400" />
-            <span>ANS Verified</span>
-          </div>
+          <span
+            className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-black uppercase tracking-[0.14em] ${visual.pillClass}`}
+          >
+            {visual.tierBadge}
+          </span>
         </div>
 
-        {/* Center Identity */}
+        {/* Center Identity: Domain with Blue-Gradient .nex + Conditional Blue Checkmark + Short Wallet */}
         <div className="relative z-10 my-auto py-2 text-left">
-          <div className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-200/80">
-            On-Chain Web3 Identity
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="truncate text-2xl sm:text-[32px] font-black tracking-tight leading-tight">
+              <span className="text-white">{baseLabel}</span>
+              <span className="bg-gradient-to-r from-sky-400 via-blue-400 to-cyan-300 bg-clip-text text-transparent">
+                .nex
+              </span>
+            </div>
+            {verified && (
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                aria-label="Verified identity"
+                className="shrink-0"
+              >
+                <defs>
+                  <linearGradient id="nx-pass-check-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#38bdf8" />
+                    <stop offset="100%" stopColor="#2563eb" />
+                  </linearGradient>
+                </defs>
+                <circle cx="12" cy="12" r="10.5" fill="url(#nx-pass-check-grad)" />
+                <path
+                  d="M7.8 12.4 10.6 15.2 16.5 9.2"
+                  stroke="#ffffff"
+                  strokeWidth="2.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            )}
           </div>
-          <div className="mt-0.5 truncate text-2xl sm:text-3xl font-black tracking-tight text-white drop-shadow-sm">
-            {normalizedDomain}
-          </div>
-          <div className="mt-2 inline-flex items-center rounded-lg border border-white/15 bg-black/45 px-2.5 py-1 font-mono text-xs font-bold text-slate-200">
-            {wallet.length >= 12 ? `${wallet.slice(0, 8)}...${wallet.slice(-6)}` : wallet}
+          <div className="nx-num mt-1.5 font-mono text-xs sm:text-[13px] font-semibold text-slate-200/80 tracking-wide">
+            {shortWallet}
           </div>
         </div>
 
-        {/* Bottom Telemetry Row — Strictly ARC MAINNET · 5042 */}
-        <div className="relative z-10 flex items-end justify-between gap-4 border-t border-white/12 pt-3 text-left">
-          <div className="flex items-center gap-5 sm:gap-7">
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-300">
-                Network
-              </div>
-              <div className="nx-num mt-0.5 text-xs sm:text-sm font-black text-cyan-300">
-                {networkLabel.toUpperCase()} · {chainId}
-              </div>
+        {/* Bottom Row: DAILY STREAK (Left) & NEXT TIER + Progress Bar (Right, Hidden for VIP) */}
+        <div className="relative z-10 flex items-end justify-between gap-4 border-t border-white/12 pt-3.5 text-left">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-200/65">
+              DAILY STREAK
             </div>
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-300">
-                Daily GM Streak
-              </div>
-              <div className="nx-num mt-0.5 text-xs sm:text-sm font-black text-amber-300">
-                {safeStreak} DAYS{tierName ? ` · ${tierName.toUpperCase()}` : ""}
-              </div>
+            <div className="nx-num mt-0.5 text-sm sm:text-base font-extrabold text-white">
+              🔥 {safeStreak} Days
             </div>
           </div>
 
-          {contractAddress && contractAddress.length >= 10 && (
-            <div className="hidden sm:block text-right">
-              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-300">
-                ANS Registry
+          {!visual.isVip && visual.nextTarget !== null ? (
+            <div className="w-36 sm:w-44 shrink-0">
+              <div className="nx-num flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-slate-200/65">
+                <span>NEXT TIER</span>
+                <span className="font-mono text-white/90">
+                  {safeStreak}/{visual.nextTarget}D
+                </span>
               </div>
-              <div className="mt-0.5 font-mono text-xs font-bold text-slate-200">
-                {contractAddress.slice(0, 6)}...{contractAddress.slice(-4)}
+              <div className="mt-2 h-[7px] w-full overflow-hidden rounded-full bg-white/15">
+                <div
+                  className={`h-full rounded-full bg-gradient-to-r transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${visual.barClass}`}
+                  style={{ width: `${progressPct.toFixed(1)}%` }}
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="text-right">
+              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-amber-200/75">
+                TIER STATUS
+              </div>
+              <div className="mt-0.5 text-sm sm:text-base font-black tracking-wider text-amber-200">
+                VIP
               </div>
             </div>
           )}

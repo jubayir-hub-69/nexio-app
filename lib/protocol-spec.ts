@@ -1033,11 +1033,11 @@ export const MODULE_FLOW_SPECS: readonly ModuleFlowSpec[] = [
     svgAlt: "Nexio Pass Sovereign On-Chain Identity Verification animated diagram",
     contractsAndRoutes: "NexNameService (`hasDomain` + `resolveByAddress` + `resolve`), PassExporter.ts (3× Canvas 2D)",
     summary:
-      "Verifies connected wallet identity on Arc Mainnet (`5042`) by cross-checking `resolveByAddress(wallet)` against forward `resolve(label) === wallet`, recovering bindings even after browser storage is cleared, and exports an `ARC MAINNET · 5042` holographic card locally.",
+      "Verifies connected wallet identity on Arc Mainnet (`5042`) by cross-checking `resolveByAddress(wallet)` against forward `resolve(label) === wallet`, recovering bindings even after browser storage is cleared, and exports a 1.586:1 tier-themed fintech Pass card locally.",
     invariants: [
-      "Header & Pass badges require verified bidirectional on-chain match (`passVerified === true`).",
-      "Stamped `ARC MAINNET · 5042` and rendered on local 2D Canvas with zero external CDN scripts.",
-      "1-click `Recover My Domain` restores profile & Pass state directly from `0xE3Fd…5Ed7`.",
+      "Header & Pass blue verification checkmarks require verified bidirectional on-chain match (`passVerified === true`).",
+      "Rendered at ISO ID-1 1.586:1 proportions (24px radius, tier-matched metallic gradients, blue-gradient `.nex`) on local 3× 2D Canvas with zero external CDN scripts.",
+      "1-click `Recover Bound .nex Domain` restores profile & Pass state directly from `0xE3Fd…5Ed7`.",
     ],
   },
   {

@@ -62,24 +62,26 @@
     <text x="334" y="201" fill="#6ee7b7" font-size="10" font-weight="800" class="f-mono">2. !isAvailable("founder")</text>
     <text x="334" y="218" fill="#cbd5e1" font-size="9.5" class="f-mono">&#8594; resolve("founder") == wallet &#10003;</text>
 
-    <!-- Right: Recovered Holographic Nexio Pass -->
-    <rect x="644" y="68" width="244" height="176" rx="16" fill="url(#pass-sheen)" stroke="#34d399" stroke-opacity="0.75" stroke-width="1.5" />
-    <text x="662" y="94" fill="#f8fafc" font-size="12" font-weight="900" letter-spacing="1.4" class="f-sans">NEXIO PASS</text>
-    <g transform="translate(856, 90)">
-      <circle cx="0" cy="0" r="14" fill="none" stroke="#34d399" stroke-width="1.3" stroke-dasharray="3 3" class="seal-ring" />
-      <path d="M -4.5 0.5 L -1.2 3.8 L 5.2 -3.2" fill="none" stroke="#6ee7b7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <!-- Right: Recovered Fintech Nexio Pass Card -->
+    <rect x="644" y="68" width="244" height="154" rx="18" fill="url(#pass-sheen)" stroke="#38bdf8" stroke-opacity="0.65" stroke-width="1.5" />
+    <text x="662" y="92" fill="#f8fafc" font-size="11" font-weight="900" letter-spacing="2" class="f-sans">NEXIO</text>
+    <rect x="816" y="78" width="56" height="19" rx="9.5" fill="#0d3b42" stroke="#5eead4" stroke-opacity="0.55" />
+    <text x="844" y="91" text-anchor="middle" fill="#99f6e4" font-size="8.5" font-weight="900" class="f-sans">TIER 1</text>
+
+    <text x="662" y="136" fill="#ffffff" font-size="21" font-weight="900" class="f-sans">founder<tspan fill="#38bdf8">.nex</tspan></text>
+    <g transform="translate(794, 129)">
+      <circle cx="0" cy="0" r="8" fill="#0ea5e9" />
+      <path d="M -3.5 0.4 L -0.8 3.0 L 3.8 -2.6" fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
     </g>
+    <text x="662" y="156" fill="#cbd5e1" font-size="10" font-weight="700" class="f-mono">0x9AFe&#8230;d372</text>
 
-    <text x="662" y="128" fill="#7dd3fc" font-size="9" font-weight="800" letter-spacing="1.5" class="f-sans">ON-CHAIN WEB3 IDENTITY</text>
-    <text x="662" y="154" fill="#ffffff" font-size="22" font-weight="900" class="f-sans">founder.nex</text>
-    <rect x="662" y="166" width="136" height="22" rx="6" fill="#040b14" stroke="#1e293b" />
-    <text x="672" y="181" fill="#cbd5e1" font-size="10" font-weight="700" class="f-mono">0x9AFe...d372</text>
-
-    <line x1="662" y1="202" x2="870" y2="202" stroke="#ffffff" stroke-opacity="0.12" />
-    <text x="662" y="218" fill="#94a3b8" font-size="8.5" font-weight="700" class="f-sans">NETWORK</text>
-    <text x="662" y="233" fill="#22d3ee" font-size="10.5" font-weight="900" class="f-mono">ARC MAINNET &#183; 5042</text>
-    <text x="792" y="218" fill="#94a3b8" font-size="8.5" font-weight="700" class="f-sans">RECOVERY</text>
-    <text x="792" y="233" fill="#6ee7b7" font-size="10.5" font-weight="900" class="f-mono">CHAIN-NATIVE</text>
+    <line x1="662" y1="173" x2="870" y2="173" stroke="#ffffff" stroke-opacity="0.14" />
+    <text x="662" y="188" fill="#94a3b8" font-size="7.5" font-weight="700" letter-spacing="1" class="f-sans">DAILY STREAK</text>
+    <text x="662" y="206" fill="#ffffff" font-size="11.5" font-weight="900" class="f-sans">42 Days</text>
+    <text x="774" y="188" fill="#94a3b8" font-size="7.5" font-weight="700" letter-spacing="1" class="f-sans">NEXT TIER</text>
+    <text x="870" y="188" text-anchor="end" fill="#e2e8f0" font-size="8" font-weight="800" class="f-mono">42/90D</text>
+    <rect x="774" y="198" width="96" height="6" rx="3" fill="#ffffff" fill-opacity="0.18" />
+    <rect x="774" y="198" width="46" height="6" rx="3" fill="#2dd4bf" />
 
     <!-- Bidirectional Flow Lines -->
     <line x1="254" y1="142" x2="306" y2="142" stroke="#38bdf8" stroke-width="2" class="ans-flow" />

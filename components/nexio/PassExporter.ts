@@ -1,21 +1,100 @@
 /**
  * Deterministic high-DPI HTML5 <canvas> 2D Nexio Pass PNG renderer.
- * Eliminates runtime third-party CDN script injection (`dom-to-image`) and
- * avoids Tailwind v4 oklch() / backdrop-filter serialization bugs.
+ * Mirrors HoloPassCard 1:1 with exact ISO/IEC 7810 ID-1 1.586:1 bank-card proportions,
+ * 24px corner radius, tier-matched metallic gradients, blue-gradient `.nex` suffix,
+ * conditional blue verification checkmark, streak readout, and next-tier progress bar.
  */
 
 export type ExportNexioPassOptions = {
   domain: string;
   wallet: string;
   streak: number;
-  tierName?: string;
-  chainId?: number;
-  networkLabel?: string;
-  contractAddress?: string;
+  verified?: boolean;
   logoSrc?: string;
   scale?: number;
   filename?: string;
 };
+
+type PassTierPalette = {
+  tierBadge: string;
+  bgStops: readonly [string, string, string];
+  orbTopRight: string;
+  orbBottomLeft: string;
+  borderStroke: string;
+  pillBg: string;
+  pillBorder: string;
+  pillText: string;
+  barStart: string;
+  barEnd: string;
+  nextTarget: number | null;
+  isVip: boolean;
+};
+
+function getPassTierPalette(streak: number): PassTierPalette {
+  const days = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0;
+  if (days >= 180) {
+    return {
+      tierBadge: "VIP",
+      bgStops: ["#1a1106", "#422b0e", "#734c16"],
+      orbTopRight: "rgba(251, 191, 36, 0.34)",
+      orbBottomLeft: "rgba(217, 119, 6, 0.24)",
+      borderStroke: "rgba(253, 224, 71, 0.38)",
+      pillBg: "rgba(251, 191, 36, 0.18)",
+      pillBorder: "rgba(253, 224, 71, 0.45)",
+      pillText: "#fde68a",
+      barStart: "#fbbf24",
+      barEnd: "#f59e0b",
+      nextTarget: null,
+      isVip: true,
+    };
+  }
+  if (days >= 90) {
+    return {
+      tierBadge: "TIER 2",
+      bgStops: ["#130829", "#2a1359", "#431c85"],
+      orbTopRight: "rgba(192, 132, 252, 0.32)",
+      orbBottomLeft: "rgba(129, 140, 248, 0.24)",
+      borderStroke: "rgba(216, 180, 254, 0.34)",
+      pillBg: "rgba(168, 85, 247, 0.2)",
+      pillBorder: "rgba(216, 180, 254, 0.42)",
+      pillText: "#e9d5ff",
+      barStart: "#c084fc",
+      barEnd: "#818cf8",
+      nextTarget: 180,
+      isVip: false,
+    };
+  }
+  if (days >= 30) {
+    return {
+      tierBadge: "TIER 1",
+      bgStops: ["#041a1f", "#093640", "#0d545b"],
+      orbTopRight: "rgba(45, 212, 191, 0.30)",
+      orbBottomLeft: "rgba(16, 185, 129, 0.22)",
+      borderStroke: "rgba(94, 234, 212, 0.32)",
+      pillBg: "rgba(20, 184, 166, 0.2)",
+      pillBorder: "rgba(94, 234, 212, 0.42)",
+      pillText: "#99f6e4",
+      barStart: "#2dd4bf",
+      barEnd: "#34d399",
+      nextTarget: 90,
+      isVip: false,
+    };
+  }
+  return {
+    tierBadge: "MEMBER",
+    bgStops: ["#061229", "#0c2859", "#0b3c82"],
+    orbTopRight: "rgba(56, 189, 248, 0.30)",
+    orbBottomLeft: "rgba(37, 99, 235, 0.24)",
+    borderStroke: "rgba(125, 211, 252, 0.30)",
+    pillBg: "rgba(56, 189, 248, 0.16)",
+    pillBorder: "rgba(125, 211, 252, 0.38)",
+    pillText: "#bae6fd",
+    barStart: "#38bdf8",
+    barEnd: "#60a5fa",
+    nextTarget: 30,
+    isVip: false,
+  };
+}
 
 function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
@@ -59,18 +138,18 @@ function loadOptionalImage(src: string, timeoutMs = 2500): Promise<HTMLImageElem
   });
 }
 
-function drawNexioVectorMark(ctx: CanvasRenderingContext2D, x: number, y: number, boxSize: number) {
+function drawNexioFallbackMark(ctx: CanvasRenderingContext2D, x: number, y: number, boxSize: number) {
   const grad = ctx.createLinearGradient(x, y, x + boxSize, y + boxSize);
-  grad.addColorStop(0, "#22d3ee");
-  grad.addColorStop(0.55, "#3b82f6");
-  grad.addColorStop(1, "#a855f7");
+  grad.addColorStop(0, "#f8fafc");
+  grad.addColorStop(0.55, "#38bdf8");
+  grad.addColorStop(1, "#2563eb");
 
   ctx.save();
   ctx.strokeStyle = grad;
-  ctx.lineWidth = Math.max(2, boxSize * 0.095);
+  ctx.lineWidth = Math.max(2, boxSize * 0.1);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  const pad = boxSize * 0.27;
+  const pad = boxSize * 0.26;
   ctx.beginPath();
   ctx.moveTo(x + pad, y + boxSize - pad);
   ctx.lineTo(x + pad, y + pad);
@@ -80,24 +159,46 @@ function drawNexioVectorMark(ctx: CanvasRenderingContext2D, x: number, y: number
   ctx.restore();
 }
 
+function drawBlueVerifiedBadge(ctx: CanvasRenderingContext2D, cx: number, cy: number, radius: number) {
+  ctx.save();
+  const badgeGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+  badgeGrad.addColorStop(0, "#38bdf8");
+  badgeGrad.addColorStop(1, "#2563eb");
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fillStyle = badgeGrad;
+  ctx.fill();
+
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = Math.max(1.8, radius * 0.2);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - radius * 0.42, cy + radius * 0.04);
+  ctx.lineTo(cx - radius * 0.1, cy + radius * 0.36);
+  ctx.lineTo(cx + radius * 0.46, cy - radius * 0.32);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export async function renderNexioPassCanvas({
   domain,
   wallet,
   streak,
-  tierName,
-  chainId = 5042,
-  networkLabel = "ARC MAINNET",
-  contractAddress,
-  logoSrc = "/nexio-logo.png",
+  verified = false,
+  logoSrc = "/nexio-logo.jpg",
   scale = 3,
 }: ExportNexioPassOptions): Promise<HTMLCanvasElement> {
   if (typeof document === "undefined") {
     throw new Error("Canvas rendering requires a browser environment.");
   }
 
-  const baseW = 480;
-  const baseH = 304; // 1.5789:1 ISO ID-1 identity card ratio
+  // Exact 1.586:1 ISO/IEC 7810 ID-1 fintech bank card ratio with 24px radius
+  const baseW = 476;
+  const baseH = 300;
   const dpr = Math.max(1, Math.min(4, scale));
+  const safeStreak = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0;
+  const palette = getPassTierPalette(safeStreak);
 
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(baseW * dpr);
@@ -108,186 +209,190 @@ export async function renderNexioPassCanvas({
 
   ctx.scale(dpr, dpr);
 
-  // 1. Card Base Clip & Obsidian-Navy Gradient
+  // 1. Card Base Clip (24px radius) & Tier-Matched Metallic Gradient
   ctx.save();
-  drawRoundedRect(ctx, 0, 0, baseW, baseH, 28);
+  drawRoundedRect(ctx, 0, 0, baseW, baseH, 24);
   ctx.clip();
 
   const bgGrad = ctx.createLinearGradient(0, 0, baseW, baseH);
-  bgGrad.addColorStop(0, "#050B16");
-  bgGrad.addColorStop(0.52, "#0A1933");
-  bgGrad.addColorStop(1, "#062538");
+  bgGrad.addColorStop(0, palette.bgStops[0]);
+  bgGrad.addColorStop(0.52, palette.bgStops[1]);
+  bgGrad.addColorStop(1, palette.bgStops[2]);
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, baseW, baseH);
 
-  // 2. Ambient Specular Orbs
-  const cyanOrb = ctx.createRadialGradient(baseW * 0.82, baseH * 0.16, 8, baseW * 0.82, baseH * 0.16, 210);
-  cyanOrb.addColorStop(0, "rgba(6, 182, 212, 0.28)");
-  cyanOrb.addColorStop(0.55, "rgba(6, 182, 212, 0.08)");
-  cyanOrb.addColorStop(1, "rgba(6, 182, 212, 0)");
-  ctx.fillStyle = cyanOrb;
+  // 2. Ambient Fintech Lighting Orbs
+  const topOrb = ctx.createRadialGradient(baseW * 0.85, baseH * 0.14, 6, baseW * 0.85, baseH * 0.14, 210);
+  topOrb.addColorStop(0, palette.orbTopRight);
+  topOrb.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = topOrb;
   ctx.fillRect(0, 0, baseW, baseH);
 
-  const emeraldOrb = ctx.createRadialGradient(baseW * 0.16, baseH * 0.92, 6, baseW * 0.16, baseH * 0.92, 180);
-  emeraldOrb.addColorStop(0, "rgba(16, 185, 129, 0.2)");
-  emeraldOrb.addColorStop(1, "rgba(16, 185, 129, 0)");
-  ctx.fillStyle = emeraldOrb;
+  const bottomOrb = ctx.createRadialGradient(baseW * 0.12, baseH * 0.92, 6, baseW * 0.12, baseH * 0.92, 185);
+  bottomOrb.addColorStop(0, palette.orbBottomLeft);
+  bottomOrb.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = bottomOrb;
   ctx.fillRect(0, 0, baseW, baseH);
 
-  // 3. Precision Architectural Grid + Subtle Security Foil Band
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.055)";
-  ctx.lineWidth = 1;
-  for (let x = 24; x < baseW; x += 24) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, baseH);
-    ctx.stroke();
-  }
-  for (let y = 24; y < baseH; y += 24) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(baseW, y);
-    ctx.stroke();
-  }
-
-  const foilGrad = ctx.createLinearGradient(60, 0, baseW - 40, baseH);
-  foilGrad.addColorStop(0, "rgba(255, 255, 255, 0)");
-  foilGrad.addColorStop(0.42, "rgba(34, 211, 238, 0.06)");
-  foilGrad.addColorStop(0.5, "rgba(255, 255, 255, 0.08)");
-  foilGrad.addColorStop(0.58, "rgba(16, 185, 129, 0.06)");
-  foilGrad.addColorStop(1, "rgba(255, 255, 255, 0)");
-  ctx.fillStyle = foilGrad;
+  // 3. Subtle Metallic Sheen Diagonal Band
+  const sheen = ctx.createLinearGradient(40, 0, baseW - 30, baseH);
+  sheen.addColorStop(0, "rgba(255, 255, 255, 0)");
+  sheen.addColorStop(0.44, "rgba(255, 255, 255, 0.055)");
+  sheen.addColorStop(0.5, "rgba(255, 255, 255, 0.09)");
+  sheen.addColorStop(0.56, "rgba(255, 255, 255, 0.04)");
+  sheen.addColorStop(1, "rgba(255, 255, 255, 0)");
+  ctx.fillStyle = sheen;
   ctx.fillRect(0, 0, baseW, baseH);
 
-  // 4. Header: Brand Badge + ANS Verified Cryptographic Seal
-  const padX = 32;
-  const logoBox = 40;
-  drawRoundedRect(ctx, padX, 28, logoBox, logoBox, 11);
-  ctx.fillStyle = "#040913";
+  const padX = 28;
+
+  // 4. Top Row — Official Nexio Logo + Wordmark (Left) & Minimal Tier Pill (Right)
+  const logoBox = 38;
+  drawRoundedRect(ctx, padX, 24, logoBox, logoBox, 11);
+  ctx.fillStyle = "#000000";
   ctx.fill();
-  ctx.strokeStyle = "rgba(34, 211, 238, 0.38)";
-  ctx.lineWidth = 1.25;
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  ctx.lineWidth = 1;
   ctx.stroke();
 
   const logoImg = await loadOptionalImage(logoSrc);
   if (logoImg) {
     ctx.save();
-    drawRoundedRect(ctx, padX + 4, 32, logoBox - 8, logoBox - 8, 7);
+    drawRoundedRect(ctx, padX + 2, 26, logoBox - 4, logoBox - 4, 9);
     ctx.clip();
-    ctx.drawImage(logoImg, padX + 4, 32, logoBox - 8, logoBox - 8);
+    ctx.drawImage(logoImg, padX + 2, 26, logoBox - 4, logoBox - 4);
     ctx.restore();
   } else {
-    drawNexioVectorMark(ctx, padX, 28, logoBox);
+    drawNexioFallbackMark(ctx, padX, 24, logoBox);
   }
 
   ctx.fillStyle = "#F8FAFC";
-  ctx.font = "900 18px system-ui, -apple-system, 'Segoe UI', sans-serif";
+  ctx.font = "900 15px system-ui, -apple-system, 'Segoe UI', sans-serif";
   ctx.textBaseline = "middle";
-  ctx.fillText("NEXIO PASS", padX + logoBox + 12, 48);
+  ctx.fillText("NEXIO", padX + logoBox + 11, 43);
 
-  // Verified Pill (Top Right)
-  const pillText = "ANS VERIFIED";
   ctx.font = "800 10px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  const pillTextW = ctx.measureText(pillText).width;
-  const pillW = pillTextW + 32;
-  const pillH = 26;
+  const pillW = Math.max(66, ctx.measureText(palette.tierBadge).width + 24);
+  const pillH = 24;
   const pillX = baseW - padX - pillW;
-  const pillY = 35;
-
-  drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 13);
-  ctx.fillStyle = "rgba(16, 185, 129, 0.16)";
+  const pillY = 31;
+  drawRoundedRect(ctx, pillX, pillY, pillW, pillH, 12);
+  ctx.fillStyle = palette.pillBg;
   ctx.fill();
-  ctx.strokeStyle = "rgba(52, 211, 153, 0.42)";
+  ctx.strokeStyle = palette.pillBorder;
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  // Emerald dot + checkmark inside Verified Pill
-  ctx.beginPath();
-  ctx.arc(pillX + 13, pillY + pillH / 2, 3.5, 0, Math.PI * 2);
-  ctx.fillStyle = "#34D399";
-  ctx.fill();
+  ctx.fillStyle = palette.pillText;
+  ctx.textAlign = "center";
+  ctx.fillText(palette.tierBadge, pillX + pillW / 2, pillY + pillH / 2 + 0.5);
+  ctx.textAlign = "left";
 
-  ctx.fillStyle = "#6EE7B7";
-  ctx.fillText(pillText, pillX + 22, pillY + pillH / 2 + 0.5);
+  // 5. Center Identity Block — Domain (White label + Blue-gradient `.nex` + Conditional Blue Check)
+  const cleanDomain = (domain || "nexio").trim().toLowerCase();
+  const baseLabel = cleanDomain.endsWith(".nex") ? cleanDomain.slice(0, -4) : cleanDomain;
+  const suffix = ".nex";
 
-  // 5. Center Identity Block
-  ctx.fillStyle = "rgba(165, 243, 252, 0.72)";
-  ctx.font = "800 10px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  ctx.fillText("ON-CHAIN WEB3 IDENTITY", padX, 118);
-
-  const normalizedDomain = domain.trim().toLowerCase().endsWith(".nex")
-    ? domain.trim().toLowerCase()
-    : `${domain.trim().toLowerCase() || "nexio"}.nex`;
-
-  let domainFontPx = 34;
-  ctx.font = `900 ${domainFontPx}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
-  while (ctx.measureText(normalizedDomain).width > baseW - padX * 2 && domainFontPx > 20) {
-    domainFontPx -= 2;
-    ctx.font = `900 ${domainFontPx}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
+  let fontPx = 32;
+  const maxDomainWidth = baseW - padX * 2 - (verified ? 30 : 0);
+  ctx.font = `900 ${fontPx}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
+  while (ctx.measureText(`${baseLabel}${suffix}`).width > maxDomainWidth && fontPx > 18) {
+    fontPx -= 2;
+    ctx.font = `900 ${fontPx}px system-ui, -apple-system, 'Segoe UI', sans-serif`;
   }
+
+  const labelWidth = ctx.measureText(baseLabel).width;
+  const suffixWidth = ctx.measureText(suffix).width;
+  const centerY = 142;
+
   ctx.fillStyle = "#FFFFFF";
-  ctx.fillText(normalizedDomain, padX, 150);
+  ctx.fillText(baseLabel, padX, centerY);
 
-  // Wallet Address Monospace Pill
+  const nexGrad = ctx.createLinearGradient(padX + labelWidth, centerY - fontPx * 0.5, padX + labelWidth + suffixWidth, centerY + fontPx * 0.5);
+  nexGrad.addColorStop(0, "#38bdf8");
+  nexGrad.addColorStop(0.55, "#60a5fa");
+  nexGrad.addColorStop(1, "#22d3ee");
+  ctx.fillStyle = nexGrad;
+  ctx.fillText(suffix, padX + labelWidth, centerY);
+
+  if (verified) {
+    drawBlueVerifiedBadge(ctx, padX + labelWidth + suffixWidth + 16, centerY - 1, 9.5);
+  }
+
+  // Shortened Wallet Address (`0x9AFe…d372`)
   const shortWallet =
-    wallet && wallet.length >= 12 ? `${wallet.slice(0, 10)}...${wallet.slice(-8)}` : wallet || "0x0000...0000";
-  ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  const addrW = ctx.measureText(shortWallet).width + 22;
-  drawRoundedRect(ctx, padX, 174, addrW, 28, 8);
-  ctx.fillStyle = "rgba(2, 6, 23, 0.58)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+    wallet && wallet.length >= 10
+      ? `${wallet.slice(0, 6)}\u2026${wallet.slice(-4)}`
+      : wallet || "0x0000\u20260000";
+  ctx.font = "600 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  ctx.fillStyle = "rgba(226, 232, 240, 0.78)";
+  ctx.fillText(shortWallet, padX, 174);
+
+  // 6. Bottom Footer Divider & Dual Metrics
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
   ctx.lineWidth = 1;
-  ctx.stroke();
-
-  ctx.fillStyle = "#94A3B8";
-  ctx.fillText(shortWallet, padX + 11, 188.5);
-
-  // 6. Bottom Telemetry Footer
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   ctx.beginPath();
-  ctx.moveTo(padX, 228);
-  ctx.lineTo(baseW - padX, 228);
+  ctx.moveTo(padX, 222);
+  ctx.lineTo(baseW - padX, 222);
   ctx.stroke();
 
-  // Column 1: Network (Strictly ARC MAINNET · 5042)
-  ctx.fillStyle = "#94A3B8";
+  // Bottom Left: DAILY STREAK + 🔥 {n} Days
+  ctx.fillStyle = "rgba(226, 232, 240, 0.62)";
   ctx.font = "700 9.5px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  ctx.fillText("NETWORK", padX, 248);
+  ctx.fillText("DAILY STREAK", padX, 244);
 
-  ctx.fillStyle = "#22D3EE";
-  ctx.font = "900 13px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  ctx.fillText(`${networkLabel.toUpperCase()} · ${chainId}`, padX, 268);
+  ctx.fillStyle = "#FFFFFF";
+  ctx.font = "800 15px system-ui, -apple-system, 'Segoe UI', sans-serif";
+  ctx.fillText(`\uD83D\uDD25 ${safeStreak} Days`, padX, 267);
 
-  // Column 2: GM Streak + Tier
-  const col2X = 222;
-  ctx.fillStyle = "#94A3B8";
-  ctx.font = "700 9.5px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  ctx.fillText("DAILY GM STREAK", col2X, 248);
+  // Bottom Right: NEXT TIER + Progress Bar (Hidden for VIP)
+  if (!palette.isVip && palette.nextTarget !== null) {
+    const barW = 166;
+    const barH = 7;
+    const rightX = baseW - padX;
+    const barX = rightX - barW;
 
-  const safeStreak = Number.isFinite(streak) && streak > 0 ? Math.floor(streak) : 0;
-  const streakLabel = tierName ? `${safeStreak} DAYS · ${tierName.toUpperCase()}` : `${safeStreak} DAYS`;
-  ctx.fillStyle = "#FBBF24";
-  ctx.font = "900 13px system-ui, -apple-system, 'Segoe UI', sans-serif";
-  ctx.fillText(streakLabel, col2X, 268);
-
-  // Column 3 (Right-aligned): Registry CA if provided
-  if (contractAddress && contractAddress.length >= 10) {
-    const caLabel = `${contractAddress.slice(0, 6)}...${contractAddress.slice(-4)}`;
-    ctx.textAlign = "right";
-    ctx.fillStyle = "#94A3B8";
+    ctx.fillStyle = "rgba(226, 232, 240, 0.62)";
     ctx.font = "700 9.5px system-ui, -apple-system, 'Segoe UI', sans-serif";
-    ctx.fillText("ANS REGISTRY", baseW - padX, 248);
+    ctx.fillText("NEXT TIER", barX, 244);
 
-    ctx.fillStyle = "#CBD5E1";
-    ctx.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-    ctx.fillText(caLabel, baseW - padX, 268);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(241, 245, 249, 0.9)";
+    ctx.font = "800 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+    ctx.fillText(`${safeStreak}/${palette.nextTarget}D`, rightX, 244);
+    ctx.textAlign = "left";
+
+    // Progress Bar Track
+    drawRoundedRect(ctx, barX, 262, barW, barH, 3.5);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.16)";
+    ctx.fill();
+
+    // Progress Bar Fill
+    const ratio = Math.min(1, Math.max(0, safeStreak / palette.nextTarget));
+    if (ratio > 0) {
+      const fillW = Math.max(7, Math.round(barW * ratio));
+      drawRoundedRect(ctx, barX, 262, fillW, barH, 3.5);
+      const barGrad = ctx.createLinearGradient(barX, 262, barX + fillW, 262);
+      barGrad.addColorStop(0, palette.barStart);
+      barGrad.addColorStop(1, palette.barEnd);
+      ctx.fillStyle = barGrad;
+      ctx.fill();
+    }
+  } else {
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(253, 230, 138, 0.72)";
+    ctx.font = "700 9.5px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    ctx.fillText("TIER STATUS", baseW - padX, 244);
+
+    ctx.fillStyle = "#fde68a";
+    ctx.font = "900 15px system-ui, -apple-system, 'Segoe UI', sans-serif";
+    ctx.fillText("VIP", baseW - padX, 267);
     ctx.textAlign = "left";
   }
 
-  // 7. Outer Specular Frame
-  drawRoundedRect(ctx, 0.75, 0.75, baseW - 1.5, baseH - 1.5, 27.25);
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  // 7. Outer Specular Frame (24px radius)
+  drawRoundedRect(ctx, 0.75, 0.75, baseW - 1.5, baseH - 1.5, 23.25);
+  ctx.strokeStyle = palette.borderStroke;
   ctx.lineWidth = 1.5;
   ctx.stroke();
 

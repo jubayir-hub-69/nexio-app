@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/nexio-logo.png" width="116" alt="Nexio Protocol Logo" />
+  <img src="public/nexio-logo.jpg" width="116" alt="Nexio Protocol Logo" />
 </p>
 
 <h1 align="center">Nexio Protocol</h1>
@@ -128,7 +128,7 @@
 
 - **1 Wallet = 1 Permanent `.nex` Domain:** `NexNameService` (`0xE3FdB021493953C95F4c93bCCF83B762e4475Ed7`) accepts normalized lowercase `[a-z0-9-]{1,63}` labels **without** `.nex` (rejecting `.eth`, `.arc`, underscores, and leading/trailing hyphens). Registered bindings never expire, transfer, or overwrite.
 - **Revert-on-Unregistered Contract Rule:** `resolve(_name)`, `resolveByAddress(_owner)`, and `getFullDomain(_owner)` execute `require(...)` on-chain and **revert** when unbound rather than returning `0x0000000000000000000000000000000000000000` or `""`. Always pre-check `isAvailable(label)` before `resolve(label)` and `hasDomain(wallet)` before `resolveByAddress(wallet)`.
-- **Browser-Independent Recovery & 3× Canvas Export:** Clearing `localStorage` never clears the chain. Nexio Pass executes `hasDomain(wallet)` -> `resolveByAddress(wallet)` -> verifies `resolve(label) === wallet` and exports a high-DPI `ARC MAINNET · 5042` PNG card via local 2D `<canvas>`.
+- **Browser-Independent Recovery & 3× Canvas Fintech Pass Export:** Clearing `localStorage` never clears the chain. Nexio Pass executes `hasDomain(wallet)` -> `resolveByAddress(wallet)` -> verifies `resolve(label) === wallet` and exports a high-DPI `1.586:1` (`24px` radius) tier-themed fintech Pass PNG card locally via HTML5 2D `<canvas>`.
 
 ### 7. Adaptive `eth_getLogs` History Indexer & Single-Source Specs
 

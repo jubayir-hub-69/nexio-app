@@ -16,9 +16,23 @@ const geistMono = Geist_Mono({
 const THEME_INIT_SCRIPT = `(function(){try{var s=localStorage.getItem("nexio_theme")||localStorage.getItem("trustbank_theme");var t=(s==="light"||s==="dark")?s:"dark";document.documentElement.dataset.theme=t;}catch(e){document.documentElement.dataset.theme="dark";}})();`;
 
 export const metadata: Metadata = {
-  title: "Nexio | Arc Mainnet",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://nexio.app"),
+  title: "Nexio Protocol",
   description:
-    "Institutional USDC and EURC treasury, automated yield vaults, permanent .nex identity, and settlement infrastructure on Arc Mainnet (5042).",
+    "Enterprise Stablecoin Banking, Automated Yield Vaults & Permanent .nex Identity on Arc Mainnet.",
+  openGraph: {
+    title: "Nexio Protocol",
+    description:
+      "Enterprise Stablecoin Banking, Automated Yield Vaults & Permanent .nex Identity on Arc Mainnet.",
+    images: [{ url: "/nexio-logo.jpg", width: 1024, height: 1024, alt: "Nexio Protocol" }],
+  },
+  twitter: {
+    card: "summary",
+    title: "Nexio Protocol",
+    description:
+      "Enterprise Stablecoin Banking, Automated Yield Vaults & Permanent .nex Identity on Arc Mainnet.",
+    images: ["/nexio-logo.jpg"],
+  },
 };
 
 export default function RootLayout({
