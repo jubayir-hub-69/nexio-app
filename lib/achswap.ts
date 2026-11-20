@@ -84,6 +84,163 @@ export type SpotQuoteSnapshot = {
   expired: boolean;
 };
 
+export type AchswapToken = {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  logoURI: string | null;
+  verified: boolean;
+  chainId: number;
+  priceUsd: number | null;
+  liquidityUsd: number | null;
+  volumeUsd24h: number | null;
+  priceChangePct24h: number | null;
+};
+
+export const DEFAULT_USDC_TOKEN: AchswapToken = {
+  address: "0x3600000000000000000000000000000000000000",
+  symbol: "USDC",
+  name: "USD Coin",
+  decimals: 6,
+  logoURI: "https://trade.achswap.app/img/usdc.webp",
+  verified: true,
+  chainId: ARC_CHAIN_ID,
+  priceUsd: 1,
+  liquidityUsd: null,
+  volumeUsd24h: null,
+  priceChangePct24h: null,
+};
+
+export const DEFAULT_EURC_TOKEN: AchswapToken = {
+  address: "0xbEf5f6d51CB62b58e6A8f77868681825C6fe21c1",
+  symbol: "EURC",
+  name: "EURC",
+  decimals: 6,
+  logoURI: "https://trade.achswap.app/img/eurc.png",
+  verified: true,
+  chainId: ARC_CHAIN_ID,
+  priceUsd: null,
+  liquidityUsd: null,
+  volumeUsd24h: null,
+  priceChangePct24h: null,
+};
+
+const CLIENT_TOKEN_CACHE_MS = 60_000;
+const clientTokenCache = new Map<string, { at: number; tokens: AchswapToken[] }>();
+const clientTokenInflight = new Map<string, Promise<AchswapToken[]>>();
+
+export async function fetchAchswapTokens(options?: {
+  query?: string;
+  force?: boolean;
+  signal?: AbortSignal;
+}): Promise<AchswapToken[]> {
+  const cleanQ = (options?.query || "").trim();
+  const key = cleanQ ? `q:${cleanQ.toLowerCase()}` : "top";
+  const hit = clientTokenCache.get(key);
+  if (!options?.force && hit && Date.now() - hit.at < CLIENT_TOKEN_CACHE_MS) {
+    return hit.tokens;
+  }
+
+  let pending = !options?.force ? clientTokenInflight.get(key) : undefined;
+  if (!pending) {
+    const qs = new URLSearchParams({ chainId: String(ARC_CHAIN_ID) });
+    if (cleanQ) qs.set("q", cleanQ);
+    pending = (async (): Promise<AchswapToken[]> => {
+      const response = await fetch(`/api/achswap/tokens?${qs.toString()}`, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new AchswapApiError(response.status, "UNAVAILABLE", "Could not fetch verified token list.");
+      }
+      const payload = (await response.json().catch(() => null)) as { tokens?: unknown[] } | null;
+      const raw = Array.isArray(payload?.tokens) ? payload.tokens : [];
+      const tokens: AchswapToken[] = [];
+      for (const item of raw) {
+        const rec = asRecord(item);
+        if (!rec || typeof rec.address !== "string" || !ethers.isAddress(rec.address)) continue;
+        const symbol = typeof rec.symbol === "string" ? rec.symbol.trim() : "";
+        const decimals = typeof rec.decimals === "number" ? rec.decimals : 18;
+        if (!symbol) continue;
+        tokens.push({
+          address: ethers.getAddress(rec.address),
+          symbol,
+          name: typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : symbol,
+          decimals,
+          logoURI: typeof rec.logoURI === "string" && rec.logoURI.trim() ? rec.logoURI.trim() : null,
+          verified: rec.verified === true,
+          chainId: ARC_CHAIN_ID,
+          priceUsd: typeof rec.priceUsd === "number" && Number.isFinite(rec.priceUsd) ? rec.priceUsd : null,
+          liquidityUsd:
+            typeof rec.liquidityUsd === "number" && Number.isFinite(rec.liquidityUsd)
+              ? rec.liquidityUsd
+              : null,
+          volumeUsd24h:
+            typeof rec.volumeUsd24h === "number" && Number.isFinite(rec.volumeUsd24h)
+              ? rec.volumeUsd24h
+              : null,
+          priceChangePct24h:
+            typeof rec.priceChangePct24h === "number" && Number.isFinite(rec.priceChangePct24h)
+              ? rec.priceChangePct24h
+              : null,
+        });
+      }
+      clientTokenCache.set(key, { at: Date.now(), tokens });
+      return tokens;
+    })().finally(() => {
+      if (clientTokenInflight.get(key) === pending) {
+        clientTokenInflight.delete(key);
+      }
+    });
+    clientTokenInflight.set(key, pending);
+  }
+
+  return attachAbortSignal(pending, options?.signal);
+}
+
+/**
+ * Computes a pure 0-fee (`spotOnly: true`) reference quote for any Arc Mainnet pair.
+ * Automatically picks a non-distorting unit size for high-unit-price assets (e.g. cirBTC, WETH, XAUM)
+ * so spot price checks reflect true marginal market pricing without pool impact bias.
+ */
+export async function requestPairReferenceSpot(input: {
+  tokenIn: AchswapToken;
+  tokenOut: AchswapToken;
+  chainId?: number;
+  signal?: AbortSignal;
+}): Promise<{ refAmountIn: bigint; refAmountOut: bigint } | null> {
+  const decIn = input.tokenIn.decimals;
+  const priceHint = input.tokenIn.priceUsd ?? 0;
+
+  let exp = decIn;
+  if (priceHint >= 5_000 && decIn >= 4) {
+    exp = decIn - 4; // 0.0001 unit (~$5.90 for BTC)
+  } else if (priceHint >= 100 && decIn >= 3) {
+    exp = decIn - 3; // 0.001 unit (~$1.60 for WETH / $3.50 for XAUM)
+  } else if (priceHint >= 10 && decIn >= 2) {
+    exp = decIn - 2; // 0.01 unit
+  }
+  const refAmountIn = 10n ** BigInt(Math.max(0, exp));
+
+  try {
+    const quoted = await requestAchswapQuote({
+      tokenIn: input.tokenIn.address,
+      tokenOut: input.tokenOut.address,
+      amountIn: refAmountIn,
+      slippageBps: 50,
+      chainId: input.chainId ?? ARC_CHAIN_ID,
+      spotOnly: true,
+      signal: input.signal,
+    });
+    if (quoted.amountOut <= 0n) return null;
+    return { refAmountIn, refAmountOut: quoted.amountOut };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+    return null;
+  }
+}
+
 export function clampSlippageBps(bps: number): number {
   if (!Number.isFinite(bps)) return 100;
   return Math.max(0, Math.min(ACHSWAP_MAX_SLIPPAGE_BPS, Math.round(bps)));

@@ -5,8 +5,27 @@ import { DEFAULT_FEE_RECIPIENT, feeBpsForStreak } from "@/lib/gm-tiers";
 
 export const ACHSWAP_UPSTREAM_TIMEOUT_MS = 8_000;
 export const STREAK_CACHE_MS = 60_000;
+export const TOKEN_TOP_CACHE_MS = 60_000;
+export const TOKEN_SEARCH_CACHE_MS = 15_000;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
-export const RATE_LIMIT_MAX_REQUESTS = 60;
+export const RATE_LIMIT_MAX_REQUESTS = 120;
+
+const ACHSWAP_ORIGIN = "https://trade.achswap.app";
+const ACHSWAP_TOKEN_DISCOVERY_URL = `${ACHSWAP_ORIGIN}/api/token-discovery`;
+
+export type NormalizedAchswapToken = {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  logoURI: string | null;
+  verified: boolean;
+  chainId: number;
+  priceUsd: number | null;
+  liquidityUsd: number | null;
+  volumeUsd24h: number | null;
+  priceChangePct24h: number | null;
+};
 
 export type AchswapProxyResult = {
   status: number;
@@ -616,6 +635,269 @@ export function parseSwapBody(
 
 export function isRequestAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+// ============================================================================
+// Live Achswap Token Discovery Proxy (Top + Search + On-Chain 0x Lookup)
+// ============================================================================
+
+const tokenCache = new Map<string, { at: number; ttlMs: number; tokens: NormalizedAchswapToken[] }>();
+const tokenInflight = new Map<string, Promise<NormalizedAchswapToken[]>>();
+const TOKEN_CACHE_MAX = 120;
+
+const CANONICAL_PRIORITY: Record<string, number> = {
+  "0x3600000000000000000000000000000000000000": 0, // USDC
+  "0xbef5f6d51cb62b58e6a8f77868681825c6fe21c1": 1, // EURC
+  "0x171a4217b86a807a64eb94757db6849fb4bdbaa0": 2, // cirBTC
+  "0x128cc466b61f542da60c70e3aa11c10e19b84edb": 3, // WETH
+  "0x178b01f61cbea1d2a5581fe1621be607835ec349": 4, // XAUM
+};
+
+function normalizeTokenLogo(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || /unknown-token/i.test(trimmed)) return null;
+  if (trimmed.startsWith("https://") || trimmed.startsWith("http://")) return trimmed;
+  if (trimmed.startsWith("/")) return `${ACHSWAP_ORIGIN}${trimmed}`;
+  return null;
+}
+
+function readOptionalFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeDiscoveryToken(item: unknown): NormalizedAchswapToken | null {
+  const rec = asRecord(item);
+  if (!rec || typeof rec.address !== "string" || !ethers.isAddress(rec.address)) return null;
+  const address = ethers.getAddress(rec.address);
+  if (address === ethers.ZeroAddress) return null;
+
+  const chainId =
+    typeof rec.chainId === "number" && Number.isInteger(rec.chainId) ? rec.chainId : ARC_CHAIN_ID;
+  if (chainId !== ARC_CHAIN_ID) return null;
+
+  const symbol = typeof rec.symbol === "string" ? rec.symbol.trim().slice(0, 24) : "";
+  const name = typeof rec.name === "string" ? rec.name.trim().slice(0, 64) : symbol;
+  const decimals =
+    typeof rec.decimals === "number" &&
+    Number.isInteger(rec.decimals) &&
+    rec.decimals >= 0 &&
+    rec.decimals <= 36
+      ? rec.decimals
+      : 18;
+  if (!symbol) return null;
+
+  return {
+    address,
+    symbol,
+    name: name || symbol,
+    decimals,
+    logoURI: normalizeTokenLogo(rec.logoURI ?? rec.logoUrl ?? rec.icon),
+    verified: rec.verified === true,
+    chainId: ARC_CHAIN_ID,
+    priceUsd: readOptionalFiniteNumber(rec.priceUsd),
+    liquidityUsd: readOptionalFiniteNumber(rec.liquidityUsd),
+    volumeUsd24h: readOptionalFiniteNumber(rec.volumeUsd24h),
+    priceChangePct24h: readOptionalFiniteNumber(rec.priceChangePct24h),
+  };
+}
+
+function sortAndDedupeTokens(tokens: NormalizedAchswapToken[]): NormalizedAchswapToken[] {
+  const byAddr = new Map<string, NormalizedAchswapToken>();
+  for (const tok of tokens) {
+    const key = tok.address.toLowerCase();
+    const existing = byAddr.get(key);
+    if (!existing || (!existing.verified && tok.verified) || (!existing.logoURI && tok.logoURI)) {
+      byAddr.set(key, tok);
+    }
+  }
+
+  return Array.from(byAddr.values()).sort((a, b) => {
+    const pa = CANONICAL_PRIORITY[a.address.toLowerCase()];
+    const pb = CANONICAL_PRIORITY[b.address.toLowerCase()];
+    if (pa !== undefined || pb !== undefined) {
+      return (pa ?? 999) - (pb ?? 999);
+    }
+    if (a.verified !== b.verified) return a.verified ? -1 : 1;
+    const liqDiff = (b.liquidityUsd ?? 0) - (a.liquidityUsd ?? 0);
+    if (liqDiff !== 0) return liqDiff;
+    return a.symbol.localeCompare(b.symbol);
+  });
+}
+
+async function resolveOnChainErc20Metadata(address: string): Promise<NormalizedAchswapToken | null> {
+  if (!ethers.isAddress(address)) return null;
+  const checksummed = ethers.getAddress(address);
+  if (checksummed === ethers.ZeroAddress) return null;
+
+  try {
+    return await withArcRpc(
+      async (provider) => {
+        const code = await provider.getCode(checksummed);
+        if (!code || code === "0x") return null;
+        const tok = new ethers.Contract(
+          checksummed,
+          [
+            "function symbol() view returns (string)",
+            "function name() view returns (string)",
+            "function decimals() view returns (uint8)",
+          ],
+          provider
+        );
+        const [symbol, name, decimals] = await Promise.all([
+          tok.symbol() as Promise<string>,
+          tok.name().catch(() => "") as Promise<string>,
+          tok.decimals() as Promise<bigint | number>,
+        ]);
+        const cleanSymbol = String(symbol || "").trim().slice(0, 24);
+        const cleanDecimals = Number(decimals);
+        if (!cleanSymbol || !Number.isInteger(cleanDecimals) || cleanDecimals < 0 || cleanDecimals > 36) {
+          return null;
+        }
+        return {
+          address: checksummed,
+          symbol: cleanSymbol,
+          name: String(name || cleanSymbol).trim().slice(0, 64) || cleanSymbol,
+          decimals: cleanDecimals,
+          logoURI: null,
+          verified: false,
+          chainId: ARC_CHAIN_ID,
+          priceUsd: null,
+          liquidityUsd: null,
+          volumeUsd24h: null,
+          priceChangePct24h: null,
+        };
+      },
+      { timeoutMs: 4_000, maxAttempts: 2 }
+    );
+  } catch {
+    return null;
+  }
+}
+
+function rememberTokenList(key: string, tokens: NormalizedAchswapToken[], ttlMs: number) {
+  const now = Date.now();
+  if (tokenCache.size >= TOKEN_CACHE_MAX && !tokenCache.has(key)) {
+    for (const [k, v] of tokenCache) {
+      if (now - v.at >= v.ttlMs) tokenCache.delete(k);
+    }
+    if (tokenCache.size >= TOKEN_CACHE_MAX) {
+      const oldest = tokenCache.keys().next().value;
+      if (oldest) tokenCache.delete(oldest);
+    }
+  }
+  tokenCache.set(key, { at: now, ttlMs, tokens });
+}
+
+export async function fetchAchswapTokenList(
+  rawQuery = "",
+  signal?: AbortSignal
+): Promise<{ tokens: NormalizedAchswapToken[]; source: string }> {
+  const cleanQuery = rawQuery.trim().slice(0, 64);
+  const key = cleanQuery ? `search:${cleanQuery.toLowerCase()}` : "top";
+  const ttlMs = cleanQuery ? TOKEN_SEARCH_CACHE_MS : TOKEN_TOP_CACHE_MS;
+  const cached = tokenCache.get(key);
+  if (cached && Date.now() - cached.at < cached.ttlMs) {
+    return { tokens: cached.tokens, source: "cache" };
+  }
+
+  let pending = tokenInflight.get(key);
+  if (!pending) {
+    pending = (async (): Promise<NormalizedAchswapToken[]> => {
+      const apiKey = readAchswapApiKey();
+      const url = cleanQuery
+        ? `${ACHSWAP_TOKEN_DISCOVERY_URL}?action=search&chainId=${ARC_CHAIN_ID}&q=${encodeURIComponent(cleanQuery)}`
+        : `${ACHSWAP_TOKEN_DISCOVERY_URL}?action=top&chainId=${ARC_CHAIN_ID}`;
+
+      const merged = createMergedAbortSignal(ACHSWAP_UPSTREAM_TIMEOUT_MS);
+      let discovered: NormalizedAchswapToken[] = [];
+
+      try {
+        const res = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}`, "x-api-key": apiKey } : {}),
+          },
+          cache: "no-store",
+          signal: merged.signal,
+        });
+        if (res.ok) {
+          const payload = (await res.json().catch(() => null)) as unknown;
+          const rec = asRecord(payload);
+          const rawItems = Array.isArray(rec?.tokens)
+            ? rec.tokens
+            : Array.isArray(payload)
+              ? payload
+              : [];
+          discovered = rawItems
+            .map(normalizeDiscoveryToken)
+            .filter((t): t is NormalizedAchswapToken => t !== null);
+        }
+      } catch {
+        if (cached) return cached.tokens;
+      } finally {
+        merged.cleanup();
+      }
+
+      // If the user searched a valid Arc Mainnet ERC-20 address not present in discovery, read metadata live on-chain
+      if (cleanQuery && ethers.isAddress(cleanQuery)) {
+        const lowerQ = cleanQuery.toLowerCase();
+        const exists = discovered.some((t) => t.address.toLowerCase() === lowerQ);
+        if (!exists) {
+          const onChainToken = await resolveOnChainErc20Metadata(cleanQuery);
+          if (onChainToken) discovered.push(onChainToken);
+        }
+      }
+
+      const sorted = sortAndDedupeTokens(discovered);
+      if (sorted.length > 0 || cleanQuery) {
+        rememberTokenList(key, sorted, ttlMs);
+      }
+      return sorted;
+    })().finally(() => {
+      if (tokenInflight.get(key) === pending) {
+        tokenInflight.delete(key);
+      }
+    });
+    tokenInflight.set(key, pending);
+  }
+
+  if (!signal) {
+    return { tokens: await pending, source: "live" };
+  }
+
+  const tokens = await new Promise<NormalizedAchswapToken[]>((resolve, reject) => {
+    if (signal.aborted) {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      reject(err);
+      return;
+    }
+    const onAbort = () => {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    pending!.then(
+      (val) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(val);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
+
+  return { tokens, source: "live" };
 }
 
 function readAddress(

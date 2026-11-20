@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   checkAchswapRateLimit,
+  fetchAchswapTokenList,
   isPartnerFeeRejection,
   isRequestAbort,
   parseQuoteBody,
@@ -12,6 +13,68 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ action: string }> }
+) {
+  const { action } = await params;
+  if (action !== "tokens") {
+    return NextResponse.json(
+      { error: { code: "NOT_FOUND", message: "Unknown swap routing path." } },
+      { status: 404, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  const rateCheck = checkAchswapRateLimit(request);
+  if (!rateCheck.ok) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "RATE_LIMITED",
+          message: "Rate limit exceeded. Wait a moment and try again.",
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          "Cache-Control": "no-store",
+          "Retry-After": String(rateCheck.retryAfterSeconds),
+        },
+      }
+    );
+  }
+
+  const url = new URL(request.url);
+  const query = (url.searchParams.get("q") || "").trim();
+  const chainParam = url.searchParams.get("chainId");
+  if (chainParam !== null && chainParam !== "" && chainParam !== "5042") {
+    return NextResponse.json(
+      { error: { code: "INVALID_REQUEST", message: "chainId must be 5042." } },
+      { status: 400, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  try {
+    const result = await fetchAchswapTokenList(query, request.signal);
+    return NextResponse.json(
+      { chainId: 5042, tokens: result.tokens, source: result.source },
+      {
+        status: 200,
+        headers: {
+          "Cache-Control": query ? "no-store" : "public, max-age=30, stale-while-revalidate=60",
+        },
+      }
+    );
+  } catch (error) {
+    if (isRequestAbort(error)) return new NextResponse(null, { status: 499 });
+    console.error("Token discovery proxy error:", error);
+    return NextResponse.json(
+      { error: { code: "UNAVAILABLE", message: "Could not load live Arc Mainnet token list." } },
+      { status: 502, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+}
 
 export async function POST(
   request: Request,

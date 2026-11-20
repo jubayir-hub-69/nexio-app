@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import { ACHSWAP_MAX_SLIPPAGE_BPS } from "@/lib/achswap";
 import {
+  ADDRESS_BOOK_ADDRESS,
   ANS_CONTRACT_ADDRESS,
   ARC_CHAIN_ID,
   ARC_CHAIN_ID_HEX,
@@ -66,6 +67,7 @@ export const DEPLOYMENT_TX_HASHES = {
   NexioVault: "0x8328d47886ad4844ca1e62864f4ebbe7eb472b8955fb7687a749394b36214aed",
   NexioUSDCVault: "0x14a46165848c706191f0ab72640c4c421272894b1fa1786af15e84b8fc3f446c",
   NexioSwap: "0xd0257d930ac6c195b60f282a00ccded4bf9100497e8ebcb77bb44addf1bb358c",
+  NexioAddressBook: "0xdc48cc4b1b433e90e6a87a682fd85ae2a8efb01583577245a6a9c71b0bab1828",
 } as const;
 
 export const DOCS_MOTION_SVGS = {
@@ -414,6 +416,41 @@ export const CONTRACT_SPECS: readonly ContractSpec[] = [
     ],
   },
   {
+    id: "address-book",
+    name: "NexioAddressBook (On-Chain Whitelist)",
+    solidityName: "NexioAddressBook",
+    sourceFile: "contracts/NexioAddressBook.sol",
+    category: "protocol",
+    address: ADDRESS_BOOK_ADDRESS,
+    decimals: "N/A (Up to 100 contacts/wallet)",
+    deploymentTx: DEPLOYMENT_TX_HASHES.NexioAddressBook,
+    envOverrideVar: "NEXT_PUBLIC_ADDRESS_BOOK_ADDRESS",
+    role: "Wallet-scoped on-chain recipient whitelist & contact directory for single and batch treasury transfers.",
+    integrationNote:
+      "Every write is strictly scoped to msg.sender so contacts remain isolated per treasury wallet. Supports O(1) swap-and-pop removal, 1–64 byte labels, and bound .nex domains synchronized with Send/Batch recipient autocomplete.",
+    readFunctions: [
+      "function MAX_CONTACTS_PER_WALLET() external view returns (uint256)",
+      "function getContacts(address owner) external view returns (tuple(address recipient, string label, string domain, uint64 addedAt, uint64 updatedAt, bool exists)[])",
+      "function getContactCount(address owner) external view returns (uint256)",
+      "function isWhitelisted(address owner, address recipient) external view returns (bool)",
+    ],
+    writeFunctions: [
+      "function saveContact(address recipient, string label, string domain) external",
+      "function removeContact(address recipient) external",
+    ],
+    events: [
+      "event ContactSaved(address indexed owner, address indexed recipient, string label, string domain, uint64 timestamp)",
+      "event ContactRemoved(address indexed owner, address indexed recipient, uint64 timestamp)",
+    ],
+    reverts: [
+      "Zero recipient",
+      "Invalid label length",
+      "Invalid domain length",
+      "Address book full",
+      "Contact not found",
+    ],
+  },
+  {
     id: "v2-router",
     name: "Nexio V2 Liquidity Router",
     solidityName: "IV2LiquidityRouter",
@@ -503,13 +540,14 @@ export type ApiErrorSpec = {
 };
 
 export const ROUTING_API_SPEC = {
+  proxyTokensPath: "/api/achswap/tokens",
   proxyQuotePath: "/api/achswap/quote",
   proxySwapPath: "/api/achswap/swap",
   runtime: "Next.js Node.js Route Handler (force-dynamic, Cache-Control: no-store)",
   authentication:
     "Server-only ACHSWAP_API_KEY injected as Authorization Bearer and x-api-key headers on the server; never exposed in NEXT_PUBLIC_* variables.",
   upstreamTimeoutMs: 8_000,
-  ipRateLimit: "60 requests per 60-second sliding window per client IP (returns 429 RATE_LIMITED).",
+  ipRateLimit: "120 requests per 60-second sliding window per client IP (returns 429 RATE_LIMITED).",
   pureSpotPolicy:
     "Pure Unskewed Two-Sided Market Spot (`spotOnly: true, feeBps: 0`): queries both `1 EURC -> USDC` and `1 USDC -> EURC` in parallel without calling `readGmStreak`, computing exact mid-spot `(bidOut + impliedAskOut + 1n) / 2n` when spread <= 400 bps (canceling pool swap fees to < 0.05 bps). Cached 30,000 ms with 45,000 ms hard staleness eviction.",
   quoteCachePolicy:
@@ -1118,9 +1156,9 @@ export function buildDocsTxt(): string {
   }
 
   lines.push(
-    "3. SERVER SWAP ROUTING PROXY API (/api/achswap/quote & /api/achswap/swap)",
-    "-------------------------------------------------------------------------",
-    `Local Routes      : POST ${ROUTING_API_SPEC.proxyQuotePath} | POST ${ROUTING_API_SPEC.proxySwapPath}`,
+    "3. SERVER SWAP ROUTING PROXY API (/api/achswap/tokens, /quote & /swap)",
+    "-----------------------------------------------------------------------",
+    `Local Routes      : GET ${ROUTING_API_SPEC.proxyTokensPath} | POST ${ROUTING_API_SPEC.proxyQuotePath} | POST ${ROUTING_API_SPEC.proxySwapPath}`,
     `Auth Isolation    : ${ROUTING_API_SPEC.authentication}`,
     `Timeout & Limits  : ${ROUTING_API_SPEC.upstreamTimeoutMs} ms upstream timeout | ${ROUTING_API_SPEC.ipRateLimit}`,
     `Pure Spot Engine  : ${ROUTING_API_SPEC.pureSpotPolicy}`,
@@ -1248,10 +1286,10 @@ ${contractLines}
 
 ${abiLines}
 
-## Server Swap Routing Proxy API (\`POST /api/achswap/quote\` & \`POST /api/achswap/swap\`)
+## Server Swap Routing Proxy API (\`GET /api/achswap/tokens\`, \`POST /api/achswap/quote\` & \`POST /api/achswap/swap\`)
 
 - **Key Isolation**: \`ACHSWAP_API_KEY\` stays strictly server-only (\`.env.local\`); \`PRIVATE_KEY\` stays strictly in \`.env.hardhat\`.
-- **Caching & Retries**: Quotes deduplicate in-flight requests and cache 2xx responses for \`3,000 ms\` (max \`200\` keys); swaps are never cached (\`Cache-Control: no-store\`). Both \`/quote\` and \`/swap\` enforce an \`8,000 ms\` timeout, \`60 req/60s\` per-IP rate limit, and \`[0, 400, 900] ms\` HTTP \`429\` backoff (\`Retry-After <= 5,000 ms\`).
+- **Caching & Retries**: Verified token lists cache for \`60,000 ms\` (\`15,000 ms\` for live search queries, with on-chain ERC-20 fallback for pasted \`0x\` addresses). Quotes deduplicate in-flight requests and cache 2xx responses for \`3,000 ms\` (max \`200\` keys); swaps are never cached (\`Cache-Control: no-store\`). All proxy endpoints enforce an \`8,000 ms\` timeout, \`120 req/60s\` per-IP rate limit, and \`[0, 400, 900] ms\` HTTP \`429\` backoff (\`Retry-After <= 5,000 ms\`).
 - **Consecutive Streak Fee & Targeted Fallback**: Server ignores client \`feeBps\`, calls \`DailyGM.getEffectiveStreak(trader || sender)\` (\`60s\` cache + \`stale-if-error\`; \`0\` if \`>48h\` expired), and injects \`feeBps\` (\`20 | 10 | 5 | 0\`) + \`feeRecipient\` (omitted at \`0 bps\`). If upstream returns \`400\`/\`422\` referencing \`fee\`/\`feebps\`/\`feerecipient\`/\`partner\` while \`feeBps > 0\`, the proxy retries once with \`feeBps: 0\`.
 - **Quote Request JSON**: \`{ chainId?: 5042, tokenIn: "0x...", tokenOut: "0x...", amountIn: "1000000", slippageBps: 0..${ACHSWAP_MAX_SLIPPAGE_BPS}, spotOnly?: boolean, trader?: "0x..." }\`
 - **Swap Request JSON**: \`{ chainId?: 5042, tokenIn: "0x...", tokenOut: "0x...", amountIn: "1000000", slippageBps: 0..${ACHSWAP_MAX_SLIPPAGE_BPS}, sender: "0x...", recipient?: "0x..." }\`

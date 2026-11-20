@@ -66,11 +66,26 @@ export const NEXIO_SWAP_ADDRESS = pickAddress(
   process.env.NEXT_PUBLIC_NEXIO_SWAP_ADDRESS,
   "0xD3504e2118b1c7a52cf44947510633562635ee03"
 );
+export const ADDRESS_BOOK_ADDRESS = pickAddress(
+  process.env.NEXT_PUBLIC_ADDRESS_BOOK_ADDRESS,
+  "0xD043C8e124bBa0Eb33F5f62348f1914e425663C0"
+);
 
 // Previous generation addresses retained strictly for historical log indexing
 export const LEGACY_DAILY_GM_ADDRESS = "0x609A9D897DB4c554a03d4304c8EF42b56ea32e31";
 export const LEGACY_EURC_VAULT_ADDRESS = "0xb30c9272a28749Ae0B04E1d5977337a570025009";
 export const LEGACY_USDC_VAULT_ADDRESS = "0x045700Cd0D442E65dcB549330580d9981bcbC5E0";
+
+export const ADDRESS_BOOK_ABI = [
+  "function MAX_CONTACTS_PER_WALLET() external view returns (uint256)",
+  "function saveContact(address recipient, string label, string domain) external",
+  "function removeContact(address recipient) external",
+  "function getContacts(address owner) external view returns (tuple(address recipient, string label, string domain, uint64 addedAt, uint64 updatedAt, bool exists)[])",
+  "function getContactCount(address owner) external view returns (uint256)",
+  "function isWhitelisted(address owner, address recipient) external view returns (bool)",
+  "event ContactSaved(address indexed owner, address indexed recipient, string label, string domain, uint64 timestamp)",
+  "event ContactRemoved(address indexed owner, address indexed recipient, uint64 timestamp)",
+];
 
 export const MULTICALL3_ABI = [
   "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[] returnData)",
@@ -541,6 +556,11 @@ function mapKnownReason(reason: string, context?: ErrorDecodeContext): string | 
   if (/No NLP available to claim/i.test(reason)) {
     return "No accrued NLP points available to claim yet.";
   }
+  if (/Zero recipient/i.test(reason)) return "Recipient address cannot be the zero address.";
+  if (/Invalid label length/i.test(reason)) return "Contact label must be between 1 and 64 characters.";
+  if (/Invalid domain length/i.test(reason)) return "Domain name exceeds the maximum length.";
+  if (/Address book full/i.test(reason)) return "Address book has reached the 100-contact limit.";
+  if (/Contact not found/i.test(reason)) return "That contact is no longer in your on-chain address book.";
   if (/NEX:\s*Name cannot be empty/i.test(reason)) return "Enter a valid .nex domain name.";
   if (/NEX:\s*Domain already taken/i.test(reason)) return "That .nex domain is already registered.";
   if (/NEX:\s*Address already has a domain/i.test(reason)) {
@@ -1856,4 +1876,205 @@ export async function batchResolveRecipients(items: string[]): Promise<ResolvedR
   ]);
 
   return results;
+}
+
+// ============================================================================
+// On-Chain Enterprise Address Book & Multi-Token Multicall3 Balance Reader
+// ============================================================================
+
+export type AddressBookContact = {
+  recipient: string;
+  label: string;
+  domain: string;
+  addedAt: number;
+  updatedAt: number;
+};
+
+const ADDRESS_BOOK_CACHE_MS = 30_000;
+const addressBookCache = new Map<string, { at: number; contacts: AddressBookContact[] }>();
+const addressBookInflight = new Map<string, Promise<AddressBookContact[]>>();
+
+export function invalidateAddressBookCache(owner?: string) {
+  if (owner && ethers.isAddress(owner)) {
+    addressBookCache.delete(owner.toLowerCase());
+  } else {
+    addressBookCache.clear();
+  }
+}
+
+export async function fetchAddressBookContacts(
+  owner: string,
+  options?: { force?: boolean; signal?: AbortSignal }
+): Promise<AddressBookContact[]> {
+  const trimmed = (owner || "").trim();
+  if (!trimmed || !ethers.isAddress(trimmed)) return [];
+  const checksummed = ethers.getAddress(trimmed);
+  const key = checksummed.toLowerCase();
+
+  if (!options?.force) {
+    const hit = addressBookCache.get(key);
+    if (hit && Date.now() - hit.at < ADDRESS_BOOK_CACHE_MS) {
+      return hit.contacts;
+    }
+    const existing = addressBookInflight.get(key);
+    if (existing) return existing;
+  }
+
+  const task = (async (): Promise<AddressBookContact[]> => {
+    const rawList = await withArcRpc(
+      async (provider) => {
+        const contract = new ethers.Contract(ADDRESS_BOOK_ADDRESS, ADDRESS_BOOK_ABI, provider);
+        return (await contract.getContacts(checksummed)) as Array<{
+          recipient: string;
+          label: string;
+          domain: string;
+          addedAt: bigint;
+          updatedAt: bigint;
+          exists: boolean;
+        }>;
+      },
+      { signal: options?.signal }
+    );
+
+    const contacts: AddressBookContact[] = [];
+    for (const item of rawList) {
+      if (!item || !item.exists || !ethers.isAddress(item.recipient)) continue;
+      contacts.push({
+        recipient: ethers.getAddress(item.recipient),
+        label: String(item.label || "").trim(),
+        domain: String(item.domain || "").trim(),
+        addedAt: Number(item.addedAt ?? 0n),
+        updatedAt: Number(item.updatedAt ?? 0n),
+      });
+    }
+
+    contacts.sort((a, b) => {
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      return a.label.localeCompare(b.label);
+    });
+
+    addressBookCache.set(key, { at: Date.now(), contacts });
+    return contacts;
+  })().finally(() => {
+    if (addressBookInflight.get(key) === task) {
+      addressBookInflight.delete(key);
+    }
+  });
+
+  addressBookInflight.set(key, task);
+  return task;
+}
+
+/**
+ * Fetches ERC-20 (and shared native-backed USDC) balances for an arbitrary token list
+ * in a single Multicall3.aggregate3 RPC roundtrip, falling back to Promise.allSettled.
+ * Keys in the returned record are lowercased token contract addresses.
+ */
+export async function fetchMultiTokenBalances(
+  wallet: string,
+  tokenAddresses: string[],
+  options?: { signal?: AbortSignal }
+): Promise<Record<string, bigint>> {
+  const trimmedWallet = (wallet || "").trim();
+  if (!trimmedWallet || !ethers.isAddress(trimmedWallet) || tokenAddresses.length === 0) {
+    return {};
+  }
+
+  const checksummedWallet = ethers.getAddress(trimmedWallet);
+  const uniqueTokens: string[] = [];
+  const seen = new Set<string>();
+  for (const addr of tokenAddresses) {
+    if (!addr || !ethers.isAddress(addr)) continue;
+    const lower = addr.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    uniqueTokens.push(ethers.getAddress(addr));
+  }
+  if (uniqueTokens.length === 0) return {};
+
+  const usdcLower = USDC_ERC20_ADDRESS.toLowerCase();
+  const useMc3 = await isMulticall3Available();
+
+  if (useMc3) {
+    try {
+      const mcIface = new ethers.Interface(MULTICALL3_ABI);
+      const erc20Iface = new ethers.Interface(ERC20_ABI);
+      const calls: MulticallCall[] = uniqueTokens.map((tokenAddr) => {
+        if (tokenAddr.toLowerCase() === usdcLower) {
+          return {
+            target: MULTICALL3_ADDRESS,
+            allowFailure: true,
+            callData: mcIface.encodeFunctionData("getEthBalance", [checksummedWallet]),
+          };
+        }
+        return {
+          target: tokenAddr,
+          allowFailure: true,
+          callData: erc20Iface.encodeFunctionData("balanceOf", [checksummedWallet]),
+        };
+      });
+
+      const rawResults = await withArcRpc(
+        async (provider) => {
+          const mc = new ethers.Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+          return (await mc.aggregate3.staticCall(calls)) as MulticallResult[];
+        },
+        { signal: options?.signal }
+      );
+
+      const balances: Record<string, bigint> = {};
+      for (let i = 0; i < uniqueTokens.length; i++) {
+        const tokenAddr = uniqueTokens[i];
+        const lower = tokenAddr.toLowerCase();
+        const entry = rawResults[i];
+        if (!entry?.success || !entry.returnData || entry.returnData === "0x") {
+          balances[lower] = 0n;
+          continue;
+        }
+        try {
+          if (lower === usdcLower) {
+            const nativeBal = BigInt(mcIface.decodeFunctionResult("getEthBalance", entry.returnData)[0]);
+            balances[lower] = poolUsdcFromNative(nativeBal);
+          } else {
+            balances[lower] = BigInt(erc20Iface.decodeFunctionResult("balanceOf", entry.returnData)[0]);
+          }
+        } catch {
+          balances[lower] = 0n;
+        }
+      }
+      return balances;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
+      multicall3Status = false;
+    }
+  }
+
+  return withArcRpc(
+    async (provider) => {
+      const settled = await Promise.allSettled(
+        uniqueTokens.map(async (tokenAddr) => {
+          const lower = tokenAddr.toLowerCase();
+          if (lower === usdcLower) {
+            const nativeBal = await provider.getBalance(checksummedWallet);
+            return [lower, poolUsdcFromNative(nativeBal)] as const;
+          }
+          const erc20 = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+          const bal = (await erc20.balanceOf(checksummedWallet)) as bigint;
+          return [lower, bal] as const;
+        })
+      );
+
+      const balances: Record<string, bigint> = {};
+      for (let i = 0; i < uniqueTokens.length; i++) {
+        const res = settled[i];
+        if (res.status === "fulfilled") {
+          balances[res.value[0]] = res.value[1];
+        } else {
+          balances[uniqueTokens[i].toLowerCase()] = 0n;
+        }
+      }
+      return balances;
+    },
+    { signal: options?.signal }
+  );
 }

@@ -1,5 +1,7 @@
 import { ethers } from "ethers";
 import {
+  ADDRESS_BOOK_ABI,
+  ADDRESS_BOOK_ADDRESS,
   ANS_ABI,
   ANS_CONTRACT_ADDRESS,
   ARC_EXPLORER,
@@ -40,7 +42,9 @@ export type OnChainHistoryKind =
   | "lp_add"
   | "lp_remove"
   | "gm_checkin"
-  | "domain_register";
+  | "domain_register"
+  | "contact_saved"
+  | "contact_removed";
 
 export type OnChainHistoryEntry = {
   id: string;
@@ -79,11 +83,14 @@ const erc20Iface = new ethers.Interface(ERC20_ABI);
 const gmIface = new ethers.Interface(DAILY_GM_ABI);
 const ansIface = new ethers.Interface(ANS_ABI);
 const vaultIface = new ethers.Interface(USDC_VAULT_ABI);
+const addressBookIface = new ethers.Interface(ADDRESS_BOOK_ABI);
 
 const TRANSFER_TOPIC = ethers.id("Transfer(address,address,uint256)");
 const CHECKED_IN_TOPIC = ethers.id("CheckedIn(address,uint256,uint256)");
 const DOMAIN_REGISTERED_TOPIC = ethers.id("DomainRegistered(string,address)");
 const NLP_CLAIMED_TOPIC = ethers.id("NLPClaimed(address,uint256,uint256,uint256)");
+const CONTACT_SAVED_TOPIC = ethers.id("ContactSaved(address,address,string,string,uint64)");
+const CONTACT_REMOVED_TOPIC = ethers.id("ContactRemoved(address,address,uint64)");
 
 const blockTimestampCache = new Map<number, number>();
 
@@ -259,7 +266,15 @@ export async function fetchOnChainHistory(
   const gmAddresses = uniqueAddresses([DAILY_GM_ADDRESS, LEGACY_DAILY_GM_ADDRESS]);
   const nlpVaultAddresses = uniqueAddresses([USDC_VAULT_ADDRESS, EURC_VAULT_ADDRESS]);
 
-  const [outgoingTokenLogs, incomingTokenLogs, gmLogs, ansLogs, nlpLogs] = await Promise.all([
+  const [
+    outgoingTokenLogs,
+    incomingTokenLogs,
+    gmLogs,
+    ansLogs,
+    nlpLogs,
+    contactSavedLogs,
+    contactRemovedLogs,
+  ] = await Promise.all([
     queryLogsAdaptive(
       { address: tokenAddresses, topics: [TRANSFER_TOPIC, paddedWallet] },
       scannedFromBlock,
@@ -290,6 +305,18 @@ export async function fetchOnChainHistory(
       scannedToBlock,
       opts?.signal
     ),
+    queryLogsAdaptive(
+      { address: ADDRESS_BOOK_ADDRESS, topics: [CONTACT_SAVED_TOPIC, paddedWallet] },
+      scannedFromBlock,
+      scannedToBlock,
+      opts?.signal
+    ).catch(() => [] as ethers.Log[]),
+    queryLogsAdaptive(
+      { address: ADDRESS_BOOK_ADDRESS, topics: [CONTACT_REMOVED_TOPIC, paddedWallet] },
+      scannedFromBlock,
+      scannedToBlock,
+      opts?.signal
+    ).catch(() => [] as ethers.Log[]),
   ]);
 
   const seenIds = new Set<string>();
@@ -424,6 +451,75 @@ export async function fetchOnChainHistory(
         decimals: null,
         counterparty: ANS_CONTRACT_ADDRESS,
         domain: fullDomain,
+        explorerUrl: `${ARC_EXPLORER}/tx/${log.transactionHash}`,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  for (const log of contactSavedLogs) {
+    if (!log.transactionHash) continue;
+    const id = `${log.transactionHash.toLowerCase()}:${log.index}`;
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+
+    try {
+      const parsed = addressBookIface.parseLog({ topics: [...log.topics], data: log.data });
+      if (!parsed || parsed.name !== "ContactSaved") continue;
+      const recipient = ethers.getAddress(String(parsed.args[1]));
+      const contactLabel = String(parsed.args[2] ?? "").trim();
+      const contactDomain = String(parsed.args[3] ?? "").trim();
+      const ts = Number(BigInt(parsed.args[4]));
+      rememberBlockTimestamp(log.blockNumber, ts);
+      protocolEntries.push({
+        id,
+        txHash: log.transactionHash,
+        logIndex: log.index,
+        blockNumber: log.blockNumber,
+        timestamp: ts > 0 ? ts : null,
+        kind: "contact_saved",
+        label: contactLabel ? `Whitelisted Contact: ${contactLabel}` : "Whitelisted Address Book Contact",
+        direction: "protocol",
+        tokenSymbol: null,
+        amountRaw: null,
+        amountFormatted: null,
+        decimals: null,
+        counterparty: recipient,
+        domain: contactDomain || null,
+        explorerUrl: `${ARC_EXPLORER}/tx/${log.transactionHash}`,
+      });
+    } catch {
+      continue;
+    }
+  }
+
+  for (const log of contactRemovedLogs) {
+    if (!log.transactionHash) continue;
+    const id = `${log.transactionHash.toLowerCase()}:${log.index}`;
+    if (seenIds.has(id)) continue;
+    seenIds.add(id);
+
+    try {
+      const parsed = addressBookIface.parseLog({ topics: [...log.topics], data: log.data });
+      if (!parsed || parsed.name !== "ContactRemoved") continue;
+      const recipient = ethers.getAddress(String(parsed.args[1]));
+      const ts = Number(BigInt(parsed.args[2]));
+      rememberBlockTimestamp(log.blockNumber, ts);
+      protocolEntries.push({
+        id,
+        txHash: log.transactionHash,
+        logIndex: log.index,
+        blockNumber: log.blockNumber,
+        timestamp: ts > 0 ? ts : null,
+        kind: "contact_removed",
+        label: "Removed Address Book Contact",
+        direction: "protocol",
+        tokenSymbol: null,
+        amountRaw: null,
+        amountFormatted: null,
+        decimals: null,
+        counterparty: recipient,
         explorerUrl: `${ARC_EXPLORER}/tx/${log.transactionHash}`,
       });
     } catch {

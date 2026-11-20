@@ -240,6 +240,53 @@ export function LinkIcon({ size = 18, ...props }: IconProps) {
   );
 }
 
+export function BookUserIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M4.75 4.5A2.25 2.25 0 0 1 7 2.25h11.25a1.5 1.5 0 0 1 1.5 1.5v16.5a1.5 1.5 0 0 1-1.5 1.5H7a2.25 2.25 0 0 1-2.25-2.25V4.5Z" />
+      <circle cx="12.5" cy="9.75" r="2.25" />
+      <path d="M8.75 16.5c.75-1.75 2.15-2.75 3.75-2.75s3 1 3.75 2.75" />
+      <path d="M2.75 7.5h2M2.75 12h2M2.75 16.5h2" />
+    </svg>
+  );
+}
+
+export function ChevronDownIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="m6.5 9.25 5.5 5.5 5.5-5.5" />
+    </svg>
+  );
+}
+
+export function PlusIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ size = 15, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M4.25 6.5h15.5" />
+      <path d="M9.5 6.5V4.75a1.5 1.5 0 0 1 1.5-1.5h2a1.5 1.5 0 0 1 1.5 1.5V6.5" />
+      <path d="M6.25 6.5 7.2 19a1.75 1.75 0 0 0 1.75 1.62h6.1A1.75 1.75 0 0 0 16.8 19l.95-12.5" />
+      <path d="M10.25 10.5v5.5M13.75 10.5v5.5" />
+    </svg>
+  );
+}
+
+export function EditIcon({ size = 15, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M14.5 4.75 19.25 9.5 9.25 19.5H4.5v-4.75l10-10Z" />
+      <path d="m12.75 6.5 4.75 4.75" />
+    </svg>
+  );
+}
+
 export function NexioMarkIcon({ size = 24, ...props }: IconProps) {
   return (
     <svg

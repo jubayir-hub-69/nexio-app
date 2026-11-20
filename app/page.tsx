@@ -42,6 +42,7 @@ import {
   decodeNexioError,
   ensureExactAllowance,
   fetchAccountProtocolSnapshot,
+  fetchAddressBookContacts,
   fetchPairState,
   formatDisplay,
   formatExact,
@@ -49,6 +50,7 @@ import {
   formatSharePercent,
   getArcReadProvider,
   getTxErrorMessage,
+  invalidateAddressBookCache,
   invalidateAnsCache,
   invalidatePairCache,
   invalidateSnapshotCache,
@@ -69,6 +71,7 @@ import {
   swapDeadline,
   underlyingFromLp,
   validateAnsDomainInput,
+  type AddressBookContact,
   type AllowanceStage,
   type ResolvedRecipient,
   type TxExecutionStage,
@@ -76,13 +79,8 @@ import {
 import {
   ACHSWAP_MAX_SLIPPAGE_BPS,
   SPOT_MAX_STALENESS_MS,
-  assessStableSwap,
-  describeAchswapError,
   isAbortError,
   isSpotRateFresh,
-  requestAchswapQuote,
-  requestAchswapSwap,
-  requestOneUnitSpotOut,
   requestOneUnitSpotSnapshot,
 } from "@/lib/achswap";
 import {
@@ -96,9 +94,12 @@ import {
 } from "@/lib/gm-tiers";
 import { fetchOnChainHistory, type OnChainHistoryEntry } from "@/lib/history";
 import {
+  AddressBookAutocomplete,
+  AddressBookModal,
   AlertTriangleIcon,
   AnimatedNumber,
   BatchCapacityRail,
+  BookUserIcon,
   CloseIcon,
   CopyButton,
   DailyGmGauge,
@@ -112,11 +113,10 @@ import {
   MoonIcon,
   OnChainSeal,
   PassBadgeIcon,
+  PlusIcon,
   PortfolioAllocationBar,
-  PriceImpactMeter,
   QrCodeIcon,
   QrCodeSvg,
-  QuoteFreshnessRing,
   RadarSpinner,
   ReceiveArrowIcon,
   RefreshCwIcon,
@@ -126,11 +126,11 @@ import {
   ShieldCheckIcon,
   SparklesSealIcon,
   SunIcon,
-  SwapFlipButton,
-  SwapRouteConduit,
+  SwapModule,
   TxLifecycleStepper,
   VaultPositionMeter,
   exportNexioPassPng,
+  findMatchingContact,
   type BatchRecipientStatus,
   type TxLifecycleState,
   type TxStepItem,
@@ -197,7 +197,6 @@ const ZERO = 0n;
 const UNIT_6 = 1_000_000n;
 const NLP_SCALE_12 = 1_000_000_000_000n;
 const NLP_DIVISOR = 864_000n; // Exact: 100 * 10^6 staked * 10^12 * 86,400s / 864,000 = 10 * 10^18 NLP / 24h
-const SWAP_QUOTE_REFRESH_MS = 15_000;
 
 function readDocumentTheme(): AppTheme {
   if (typeof window === "undefined") return "dark";
@@ -482,23 +481,15 @@ export default function Home() {
   const [eurcSpotOut, setEurcSpotOut] = useState<bigint | null>(null);
   const [eurcSpotFetchedAt, setEurcSpotFetchedAt] = useState<number>(0);
 
-  // Nexio Swap
-  const [swapInput, setSwapInput] = useState("");
-  const [swapDirection, setSwapDirection] = useState<"USDCtoEURC" | "EURCtoUSDC">("USDCtoEURC");
+  // Nexio Swap & On-Chain Address Book
   const [isSwapping, setIsSwapping] = useState(false);
-  const [swapQuote, setSwapQuote] = useState("");
-  const [swapQuoteRaw, setSwapQuoteRaw] = useState<bigint>(ZERO);
-  const [swapQuoteError, setSwapQuoteError] = useState("");
-  const [swapMinRaw, setSwapMinRaw] = useState<bigint>(ZERO);
-  const [swapQuoting, setSwapQuoting] = useState(false);
-  const [swapImpactBps, setSwapImpactBps] = useState<number | null>(null);
-  const [swapPartnerBps, setSwapPartnerBps] = useState<number | null>(null);
-  const [swapLossBps, setSwapLossBps] = useState<number | null>(null);
-  const [swapBlockReason, setSwapBlockReason] = useState("");
-  const [slippageBps, setSlippageBps] = useState(100);
-  const [customSlippage, setCustomSlippage] = useState("");
-  const [showSlippage, setShowSlippage] = useState(false);
-  const [swapRefreshTick, setSwapRefreshTick] = useState(0);
+  const [addressBookContacts, setAddressBookContacts] = useState<AddressBookContact[]>([]);
+  const [addressBookLoading, setAddressBookLoading] = useState(false);
+  const [showAddressBookModal, setShowAddressBookModal] = useState(false);
+  const [addressBookInitialRecipient, setAddressBookInitialRecipient] = useState<
+    string | undefined
+  >(undefined);
+  const [sendInputFocused, setSendInputFocused] = useState(false);
 
   // Liquidity (LP)
   const [lpMode, setLpMode] = useState<"add" | "remove">("add");
@@ -552,6 +543,7 @@ export default function Home() {
   const verifyPassGenRef = useRef(0);
   const recipientResolveGenRef = useRef(0);
   const historyGenRef = useRef(0);
+  const addressBookGenRef = useRef(0);
   const messageTimerRef = useRef<number | null>(null);
   const sendLockRef = useRef(false);
   const lastLpQuoteKeyRef = useRef("");
@@ -793,16 +785,12 @@ export default function Home() {
       setShowRequestModal(false);
       setShowDomainSuccess(false);
       setVaultInput("");
-      setSwapInput("");
-      setSwapQuote("");
-      setSwapQuoteRaw(ZERO);
-      setSwapMinRaw(ZERO);
-      setSwapImpactBps(null);
-      setSwapPartnerBps(null);
-      setSwapLossBps(null);
-      setSwapBlockReason("");
-      setSwapQuoteError("");
-      setSwapQuoting(false);
+      setAddressBookContacts([]);
+      setAddressBookLoading(false);
+      setShowAddressBookModal(false);
+      setAddressBookInitialRecipient(undefined);
+      setSendInputFocused(false);
+      addressBookGenRef.current += 1;
       setLpUsdcInput("");
       setLpEurcInput("");
       setLpRemoveInput("");
@@ -1127,6 +1115,45 @@ export default function Home() {
     },
     []
   );
+
+  // On-Chain Address Book Loader (NexioAddressBook.getContacts)
+  const loadAddressBookContacts = useCallback(
+    async (targetWallet?: string, force = false) => {
+      const target = (targetWallet ?? walletRef.current).trim();
+      if (!target || !ethers.isAddress(target)) {
+        setAddressBookContacts([]);
+        return;
+      }
+      const gen = ++addressBookGenRef.current;
+      setAddressBookLoading(true);
+      try {
+        if (force) invalidateAddressBookCache(target);
+        const list = await fetchAddressBookContacts(target, { force });
+        if (
+          gen !== addressBookGenRef.current ||
+          walletRef.current.toLowerCase() !== target.toLowerCase()
+        ) {
+          return;
+        }
+        setAddressBookContacts(list);
+      } catch {
+        // Keep last loaded contacts on transient RPC hiccups
+      } finally {
+        if (gen === addressBookGenRef.current) {
+          setAddressBookLoading(false);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!wallet || !isArcMainnet) return;
+    const timer = window.setTimeout(() => {
+      void loadAddressBookContacts(wallet, false);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [wallet, isArcMainnet, loadAddressBookContacts]);
 
   // Pure Unskewed Two-Sided 1-EURC Live Market Spot Mark (with strict 45s staleness eviction)
   useEffect(() => {
@@ -2991,74 +3018,8 @@ export default function Home() {
   };
 
   // ============================================================================
-  // Module 3: Nexio Swap (Nexio Routing Engine)
+  // Module 3 Helpers: Slippage Utility, Swap Refresh & Address Book Selection
   // ============================================================================
-  const clearSwapQuoteState = useCallback(() => {
-    setSwapQuote("");
-    setSwapQuoteRaw(ZERO);
-    setSwapMinRaw(ZERO);
-    setSwapImpactBps(null);
-    setSwapPartnerBps(null);
-    setSwapLossBps(null);
-    setSwapBlockReason("");
-  }, []);
-
-  const syncSwapDraftState = useCallback(
-    (nextInput: string, nextDir: "USDCtoEURC" | "EURCtoUSDC") => {
-      const trimmed = nextInput.trim();
-      if (!trimmed || isAmountDraft(trimmed)) {
-        setSwapQuoting(false);
-        setSwapQuoteError("");
-        clearSwapQuoteState();
-        return;
-      }
-      const inDec = nextDir === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS;
-      const strict = parseStrictAmount(trimmed, inDec);
-      if (!strict.ok || strict.value <= ZERO) {
-        setSwapQuoting(false);
-        setSwapQuoteError(strict.ok ? "" : strict.error);
-        clearSwapQuoteState();
-        return;
-      }
-      setSwapQuoteError("");
-      setSwapQuoting(true);
-    },
-    [clearSwapQuoteState]
-  );
-
-  const handleSwapInputChange = (raw: string) => {
-    const clean = sanitizeDecimalDraft(raw);
-    setSwapInput(clean);
-    syncSwapDraftState(clean, swapDirection);
-  };
-
-  const handleFlipSwapDirection = () => {
-    const nextDir = swapDirection === "USDCtoEURC" ? "EURCtoUSDC" : "USDCtoEURC";
-    setSwapDirection(nextDir);
-    clearSwapQuoteState();
-    syncSwapDraftState(swapInput, nextDir);
-  };
-
-  const fillSwapMax = () => {
-    if (swapDirection === "USDCtoEURC") {
-      if (usdcSpendable <= ZERO) {
-        showMessage("Insufficient USDC remaining after the 0.005 gas buffer.");
-        return;
-      }
-      const next = formatExact(usdcSpendable, WUSDC_DECIMALS);
-      setSwapInput(next);
-      syncSwapDraftState(next, swapDirection);
-    } else {
-      if (eurcBalanceRaw <= ZERO) {
-        showMessage("No EURC balance available to swap.");
-        return;
-      }
-      const next = formatExact(eurcBalanceRaw, EURC_DECIMALS);
-      setSwapInput(next);
-      syncSwapDraftState(next, swapDirection);
-    }
-  };
-
   const applyCustomSlippage = (
     raw: string,
     setter: (bps: number) => void,
@@ -3069,399 +3030,85 @@ export default function Home() {
     setter(Math.max(1, Math.min(maxBps, Math.round(n * 100))));
   };
 
-  const swapInDecimals = swapDirection === "USDCtoEURC" ? WUSDC_DECIMALS : EURC_DECIMALS;
-  const swapOutDecimals = swapDirection === "USDCtoEURC" ? EURC_DECIMALS : WUSDC_DECIMALS;
-  const swapStrictIn = useMemo(
-    () => parseStrictAmount(swapInput, swapInDecimals),
-    [swapInput, swapInDecimals]
-  );
-  const swapAmountIn = swapStrictIn.ok && swapStrictIn.value > ZERO ? swapStrictIn.value : null;
-
-  const swapInsufficient =
-    Boolean(swapAmountIn) &&
-    (swapDirection === "USDCtoEURC"
-      ? swapAmountIn! > usdcSpendable
-      : swapAmountIn! > eurcBalanceRaw);
-  const swapMissingEurcGas =
-    swapDirection === "EURCtoUSDC" && Boolean(wallet) && usdcBalanceRaw <= ZERO;
-
   const swapUsdcLabel = formatPretty(usdcWallet6, WUSDC_DECIMALS, 6);
   const swapEurcLabel = formatPretty(eurcBalanceRaw, EURC_DECIMALS, 6);
 
-  const activeSwapQuoteKey = useMemo(() => {
-    if (!swapAmountIn) return "";
-    return `${swapDirection}:${swapAmountIn.toString()}:${slippageBps}:${(
-      wallet || "anon"
-    ).toLowerCase()}:${streak}:${swapRefreshTick}`;
-  }, [swapDirection, swapAmountIn, slippageBps, wallet, streak, swapRefreshTick]);
-
-  // 15s Visible-Tab Active Quote Auto-Refresh
-  useEffect(() => {
-    if (selectedTab !== "swap" || !swapAmountIn || isSwapping) return;
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      if (txBusyRef.current) return;
-      setSwapQuoting(true);
-      setSwapRefreshTick((t) => t + 1);
-    }, SWAP_QUOTE_REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, [selectedTab, swapAmountIn, isSwapping]);
-
-  // Debounced Swap Quote Loader
-  useEffect(() => {
-    if (!activeSwapQuoteKey || !swapAmountIn) return;
-
-    const controller = new AbortController();
-    let cancelled = false;
-
-    const timer = window.setTimeout(async () => {
-      const isUsdcIn = swapDirection === "USDCtoEURC";
-      const tokenIn = isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS;
-      const tokenOut = isUsdcIn ? EURC_ADDRESS : WUSDC_ADDRESS;
-      const oneUnit = ethers.parseUnits("1", swapInDecimals);
-
-      setSwapQuoting(true);
-      try {
-        const [quoted, spotAmountOut] = await Promise.all([
-          requestAchswapQuote({
-            tokenIn,
-            tokenOut,
-            amountIn: swapAmountIn,
-            slippageBps,
-            chainId: ARC_CHAIN_ID,
-            trader: wallet || undefined,
-            signal: controller.signal,
-          }),
-          requestOneUnitSpotOut({
-            tokenIn,
-            tokenOut,
-            decimals: swapInDecimals,
-            chainId: ARC_CHAIN_ID,
-            signal: controller.signal,
-          }),
-        ]);
-
-        if (cancelled || controller.signal.aborted) return;
-
-        const spotOut = spotAmountOut ?? (swapAmountIn === oneUnit ? quoted.amountOut : null);
-        const assessed = assessStableSwap(
-          swapAmountIn,
-          quoted.amountOut,
-          spotOut === null ? null : oneUnit,
-          spotOut,
-          quoted.priceImpactBps
-        );
-
-        setSwapQuoteRaw(quoted.amountOut);
-        setSwapMinRaw(quoted.minAmountOut);
-        setSwapQuote(formatPretty(quoted.amountOut, swapOutDecimals, 6));
-        setSwapImpactBps(quoted.priceImpactBps);
-        setSwapPartnerBps(quoted.partnerBps);
-        setSwapLossBps(assessed.valueLossBps);
-        setSwapBlockReason(assessed.blocked ? assessed.reason : "");
-        setSwapQuoteError("");
-      } catch (error) {
-        if (cancelled || isAbortError(error)) return;
-        clearSwapQuoteState();
-        setSwapQuoteError(
-          describeAchswapError(error) ?? "No quote available. Check pool liquidity."
-        );
-      } finally {
-        if (!cancelled) setSwapQuoting(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      window.clearTimeout(timer);
-    };
-  }, [
-    activeSwapQuoteKey,
-    swapAmountIn,
-    swapDirection,
-    swapInDecimals,
-    swapOutDecimals,
-    slippageBps,
-    wallet,
-    clearSwapQuoteState,
-  ]);
-
-  const handleSwap = async () => {
-    if (!wallet) {
-      showMessage("Connect wallet first.");
-      return;
+  const handleSwapFinalized = useCallback(() => {
+    invalidatePairCache();
+    if (walletRef.current) {
+      invalidateSnapshotCache(walletRef.current);
+      void syncProtocolSnapshot(walletRef.current, { force: true });
+      void loadOnChainHistory(walletRef.current);
     }
-    const isUsdcIn = swapDirection === "USDCtoEURC";
-    const tokenInAddress = isUsdcIn ? WUSDC_ADDRESS : EURC_ADDRESS;
-    const tokenOutAddress = isUsdcIn ? EURC_ADDRESS : WUSDC_ADDRESS;
-    const tokenLabel = isUsdcIn ? "USDC" : "EURC";
-    const outLabel = isUsdcIn ? "EURC" : "USDC";
+  }, [syncProtocolSnapshot, loadOnChainHistory]);
 
-    const parsedIn = parseStrictAmount(swapInput, swapInDecimals);
-    if (!parsedIn.ok || parsedIn.value <= ZERO) {
-      showMessage(parsedIn.ok ? "Enter an amount greater than zero." : parsedIn.error);
-      return;
-    }
-    const amountIn = parsedIn.value;
-
-    if (isUsdcIn && amountIn > usdcSpendable) {
-      showMessage("Insufficient USDC balance after the 0.005 gas buffer.");
-      return;
-    }
-    if (!isUsdcIn) {
-      if (amountIn > eurcBalanceRaw) {
-        showMessage("Insufficient EURC balance.");
+  const handleOpenAddressBook = useCallback(
+    async (prefillRecipient?: string) => {
+      if (!wallet) {
+        showMessage("Connect wallet first.");
         return;
       }
-      if (usdcBalanceRaw <= ZERO) {
-        showMessage("Insufficient native USDC to pay Arc Mainnet gas.");
-        return;
+      if (!isArcMainnet) {
+        showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
+        const switched = await switchToArcMainnet();
+        if (!switched) {
+          showMessage(`Switch to ${ARC_NETWORK_LABEL} (5042) manually.`);
+          return;
+        }
       }
-    }
-    if (swapBlockReason) {
-      showMessage(swapBlockReason);
-      return;
-    }
+      setAddressBookInitialRecipient(prefillRecipient);
+      setShowAddressBookModal(true);
+      void loadAddressBookContacts(wallet, false);
+    },
+    [wallet, isArcMainnet, switchToArcMainnet, showMessage, loadAddressBookContacts]
+  );
 
-    if (!isArcMainnet) {
-      showMessage(`Switching to ${ARC_NETWORK_LABEL}...`);
-      const switched = await switchToArcMainnet();
-      if (!switched) {
-        showMessage(`Switch to ${ARC_NETWORK_LABEL} (5042) manually.`);
-        return;
-      }
-    }
+  const handleSelectAddressBookContact = useCallback(
+    (contact: AddressBookContact) => {
+      const valueToFill = contact.domain || contact.recipient;
+      let nextField = valueToFill;
 
-    const acceptedMinOut = swapMinRaw;
-    setIsSwapping(true);
-    setReceiptDrawerDismissed(false);
-    const opId = `swap-${Date.now()}`;
-
-    try {
-      const ethereum = getEthereum();
-      if (!ethereum) throw new Error("Wallet provider not found.");
-      const provider = new ethers.BrowserProvider(ethereum);
-      const signer = await provider.getSigner();
-      const sender = ethers.getAddress(await signer.getAddress());
-
-      setTxLifecycle({
-        id: opId,
-        operationTitle: `Swap ${tokenLabel} → ${outLabel}`,
-        amountSummary: `${formatPretty(amountIn, swapInDecimals, 6)} ${tokenLabel}`,
-        steps: [
-          {
-            id: "swap-route",
-            title: "Requesting Verified Swap Route",
-            status: "simulating",
-          },
-        ],
-        explorerUrl: ARC_EXPLORER,
-        chainId: ARC_CHAIN_ID,
-      });
-
-      const callSwapEndpoint = () =>
-        requestAchswapSwap({
-          tokenIn: tokenInAddress,
-          tokenOut: tokenOutAddress,
-          amountIn,
-          slippageBps,
-          chainId: ARC_CHAIN_ID,
-          sender,
-          recipient: sender,
-          trader: sender,
-        });
-
-      let swap = await callSwapEndpoint();
-
-      const verifySwapSafety = async (candidate: typeof swap): Promise<boolean> => {
-        const oneUnit = ethers.parseUnits("1", swapInDecimals);
-        const spotOut = await requestOneUnitSpotOut({
-          tokenIn: tokenInAddress,
-          tokenOut: tokenOutAddress,
-          decimals: swapInDecimals,
-          chainId: ARC_CHAIN_ID,
-        });
-        const assessed = assessStableSwap(
-          amountIn,
-          candidate.amountOut,
-          spotOut === null ? null : oneUnit,
-          spotOut,
-          candidate.priceImpactBps
+      if (isBatchMode) {
+        const parts = sendAddress.split(",");
+        const priorParts = parts
+          .slice(0, -1)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        const alreadyPresent = priorParts.some(
+          (p) =>
+            p.toLowerCase() === contact.recipient.toLowerCase() ||
+            (contact.domain && p.toLowerCase() === contact.domain.toLowerCase())
         );
-
-        if (assessed.blocked) {
-          setSwapBlockReason(assessed.reason);
-          setTxLifecycle(null);
-          showMessage(assessed.reason);
-          return false;
-        }
-        if (candidate.minAmountOut <= ZERO) {
-          setTxLifecycle(null);
-          showMessage("Quoted minimum output is zero; swap halted for safety.");
-          return false;
-        }
-        if (acceptedMinOut > ZERO && candidate.minAmountOut < acceptedMinOut) {
-          setSwapQuoteRaw(candidate.amountOut);
-          setSwapMinRaw(candidate.minAmountOut);
-          setSwapQuote(formatPretty(candidate.amountOut, swapOutDecimals, 6));
-          setSwapImpactBps(candidate.priceImpactBps);
-          setSwapPartnerBps(candidate.partnerBps);
-          setTxLifecycle(null);
-          showMessage(
-            "Rate moved below your displayed minimum output. Review the updated quote and confirm again."
-          );
-          return false;
-        }
-        return true;
-      };
-
-      if (!(await verifySwapSafety(swap))) return;
-
-      const spenderCandidate = swap.approval?.spender || swap.executor;
-      const requiredAllowance = swap.approval?.amount ?? amountIn;
-      let needsApprove = Boolean(swap.approval);
-
-      if (!needsApprove && spenderCandidate && ethers.isAddress(spenderCandidate)) {
-        const readTok = new ethers.Contract(tokenInAddress, ERC20_ABI, provider);
-        const currentAll = (await readTok.allowance(sender, spenderCandidate)) as bigint;
-        if (currentAll < requiredAllowance) {
-          needsApprove = true;
-        }
+        const combined = alreadyPresent ? priorParts : [...priorParts, valueToFill];
+        nextField = combined.join(", ");
       }
 
-      const steps: TxStepItem[] = [
-        ...(needsApprove && spenderCandidate
-          ? [
-              {
-                id: "swap-approve",
-                title: `Approve ${tokenLabel}`,
-                spender: spenderCandidate,
-                status: "upcoming" as TxStepStatus,
-              },
-            ]
-          : []),
-        {
-          id: "swap-exec",
-          title: `Execute ${tokenLabel} → ${outLabel} Swap`,
-          subtitle: `Min ${formatPretty(swap.minAmountOut, swapOutDecimals, 6)} ${outLabel}`,
-          status: "upcoming" as TxStepStatus,
-        },
-      ];
+      setSendAddress(nextField);
+      setSendInputFocused(false);
 
-      const syncState = (extra?: Partial<TxLifecycleState>) => {
-        setTxLifecycle({
-          id: opId,
-          operationTitle: `Swap ${tokenLabel} → ${outLabel}`,
-          amountSummary: `${formatPretty(
-            amountIn,
-            swapInDecimals,
-            6
-          )} ${tokenLabel} → min ${formatPretty(swap.minAmountOut, swapOutDecimals, 6)} ${outLabel}`,
-          steps: [...steps],
-          explorerUrl: ARC_EXPLORER,
-          chainId: ARC_CHAIN_ID,
-          ...extra,
-        });
-      };
-
-      syncState();
-
-      if (needsApprove && spenderCandidate) {
-        const approveRes = await ensureExactAllowance({
-          signer,
-          tokenAddress: swap.approval?.token ?? tokenInAddress,
-          spender: spenderCandidate,
-          requiredAmount: requiredAllowance,
-          owner: sender,
-          onStage: (st) => {
-            steps[0] = { ...steps[0], status: mapStageToStepStatus(st) };
-            syncState();
-          },
-          onApproveHash: (h) => {
-            steps[0] = { ...steps[0], txHash: h, status: "confirming_block" };
-            syncState();
-          },
-        });
-        steps[0] = { ...steps[0], status: "completed" };
-        syncState();
-
-        if (approveRes.approved) {
-          swap = await callSwapEndpoint();
-          if (!(await verifySwapSafety(swap))) return;
-        }
+      // Immediately resolve via Multicall3 so .nex forward/reverse badge appears with zero debounce lag
+      const targets = (isBatchMode ? nextField.split(",") : [nextField])
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (targets.length > 0) {
+        const gen = ++recipientResolveGenRef.current;
+        setIsResolvingRecipient(true);
+        void batchResolveRecipients(targets)
+          .then((resolved) => {
+            if (gen === recipientResolveGenRef.current) {
+              setResolvedRecipients(resolved);
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            if (gen === recipientResolveGenRef.current) {
+              setIsResolvingRecipient(false);
+            }
+          });
       }
-
-      const execIdx = steps.length - 1;
-      steps[execIdx] = {
-        ...steps[execIdx],
-        subtitle: `Min ${formatPretty(swap.minAmountOut, swapOutDecimals, 6)} ${outLabel}`,
-      };
-
-      const { hash, receipt } = await prepareAndSendTx(
-        signer,
-        {
-          to: swap.tx.to,
-          data: swap.tx.data,
-          value: swap.tx.value,
-          ...(swap.tx.gas > ZERO ? { gasLimit: swap.tx.gas } : {}),
-        },
-        {
-          label: "Settlement Executor",
-          onStage: (st) => {
-            steps[execIdx] = { ...steps[execIdx], status: mapStageToStepStatus(st) };
-            syncState();
-          },
-          onHash: (h) => {
-            steps[execIdx] = { ...steps[execIdx], txHash: h, status: "confirming_block" };
-            syncState({ txHash: h });
-          },
-        }
-      );
-
-      steps[execIdx] = { ...steps[execIdx], txHash: hash, status: "completed" };
-      syncState({
-        confirmed: true,
-        txHash: hash,
-        blockNumber: receipt?.blockNumber ?? null,
-      });
-
-      showMessage("Swap finalized on Arc Mainnet.");
-      setSwapInput("");
-      clearSwapQuoteState();
-      setSwapQuoteError("");
-      invalidatePairCache();
-      invalidateSnapshotCache(wallet);
-      void syncProtocolSnapshot(wallet, { force: true });
-      void loadOnChainHistory(wallet);
-    } catch (error) {
-      if (isUserWalletRejection(error)) {
-        setTxLifecycle(null);
-        showMessage("Swap rejected in wallet.");
-      } else {
-        const msg = describeAchswapError(error) ?? getTxErrorMessage(error);
-        setTxLifecycle((prev) =>
-          prev
-            ? {
-                ...prev,
-                failed: true,
-                errorMessage: msg,
-                steps: prev.steps.map((s) =>
-                  s.status === "simulating" ||
-                  s.status === "awaiting_wallet" ||
-                  s.status === "confirming_block"
-                    ? { ...s, status: "failed" }
-                    : s
-                ),
-              }
-            : null
-        );
-        showMessage(msg);
-      }
-    } finally {
-      setIsSwapping(false);
-    }
-  };
+    },
+    [isBatchMode, sendAddress]
+  );
 
   // ============================================================================
   // Module 4: Liquidity (LP) — Add & Remove with 5% Live Spot Skew Guard
@@ -4650,6 +4297,13 @@ export default function Home() {
 
   const singleRecipientPreview =
     !isBatchMode && rawRecipientList.length === 1 ? resolvedRecipients[0] : null;
+  const singleRecipientSavedContact = useMemo(
+    () =>
+      singleRecipientPreview?.valid && singleRecipientPreview.address
+        ? findMatchingContact(addressBookContacts, singleRecipientPreview.address)
+        : null,
+    [singleRecipientPreview, addressBookContacts]
+  );
 
   return (
     <div
@@ -4672,6 +4326,39 @@ export default function Home() {
       <ExplorerReceiptDrawer
         state={!receiptDrawerDismissed ? txLifecycle : null}
         onDismiss={() => setReceiptDrawerDismissed(true)}
+      />
+
+      {/* On-Chain Enterprise Address Book Modal */}
+      <AddressBookModal
+        open={showAddressBookModal}
+        wallet={wallet}
+        isArcMainnet={isArcMainnet}
+        chainLocked={chainLocked}
+        usdcBalanceRaw={usdcBalanceRaw}
+        contacts={addressBookContacts}
+        loading={addressBookLoading}
+        initialRecipient={addressBookInitialRecipient}
+        txLifecycle={txLifecycle}
+        getEthereum={getEthereum}
+        onClose={() => {
+          setShowAddressBookModal(false);
+          setAddressBookInitialRecipient(undefined);
+        }}
+        onSwitchToArcMainnet={switchToArcMainnet}
+        onShowMessage={showMessage}
+        onSetTxLifecycle={setTxLifecycle}
+        onResetReceiptDismissed={() => setReceiptDrawerDismissed(false)}
+        onRefreshContacts={(force) => loadAddressBookContacts(wallet, Boolean(force))}
+        onSelectContact={
+          showSendModal
+            ? handleSelectAddressBookContact
+            : (contact) => {
+                void handleOpenSendModal(contact.domain || contact.recipient);
+              }
+        }
+        onHistoryRefresh={() => {
+          if (wallet) void loadOnChainHistory(wallet);
+        }}
       />
 
       {/* Domain Registration Confirmation Modal */}
@@ -5198,10 +4885,21 @@ export default function Home() {
             <div className="space-y-4">
               <div>
                 <label
-                  className={`text-[11px] font-extrabold mb-2 flex justify-between items-center uppercase tracking-wider ${tc.textMuted}`}
+                  className={`text-[11px] font-extrabold mb-2 flex flex-wrap justify-between items-center gap-2 uppercase tracking-wider ${tc.textMuted}`}
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex flex-wrap items-center gap-1.5">
                     <span>{isBatchMode ? "Recipients (0x or .nex)" : "Recipient (0x or .nex)"}</span>
+                    <button
+                      type="button"
+                      onClick={() => void handleOpenAddressBook()}
+                      className="inline-flex items-center gap-1 normal-case tracking-normal text-[11px] font-extrabold px-2.5 py-1 rounded-lg border border-emerald-600/35 dark:border-emerald-500/35 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition"
+                    >
+                      <BookUserIcon size={13} />
+                      <span>
+                        Address Book
+                        {addressBookContacts.length > 0 ? ` (${addressBookContacts.length})` : ""}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => setIsScanning((prev) => !prev)}
@@ -5245,18 +4943,31 @@ export default function Home() {
 
                 {isBatchMode ? (
                   <div>
-                    <textarea
-                      value={sendAddress}
-                      onChange={(e) => {
-                        setSendAddress(e.target.value);
-                        if (!e.target.value.trim()) {
-                          setResolvedRecipients([]);
-                          setIsResolvingRecipient(false);
-                        }
-                      }}
-                      placeholder="0x19c2..., jubayir.nex, 0x8a4d..."
-                      className={`w-full rounded-2xl border px-4 py-3 focus:outline-none transition font-mono text-xs sm:text-sm resize-none h-24 ${tc.inputBg}`}
-                    />
+                    <div className="relative">
+                      <textarea
+                        value={sendAddress}
+                        onFocus={() => setSendInputFocused(true)}
+                        onBlur={() => window.setTimeout(() => setSendInputFocused(false), 120)}
+                        onChange={(e) => {
+                          setSendAddress(e.target.value);
+                          setSendInputFocused(true);
+                          if (!e.target.value.trim()) {
+                            setResolvedRecipients([]);
+                            setIsResolvingRecipient(false);
+                          }
+                        }}
+                        placeholder="0x19c2..., jubayir.nex, or type a saved contact name"
+                        className={`w-full rounded-2xl border px-4 py-3 focus:outline-none transition font-mono text-xs sm:text-sm resize-none h-24 ${tc.inputBg}`}
+                      />
+                      <AddressBookAutocomplete
+                        contacts={addressBookContacts}
+                        inputValue={sendAddress}
+                        isBatchMode
+                        open={sendInputFocused}
+                        onSelect={handleSelectAddressBookContact}
+                        onOpenAddressBook={() => void handleOpenAddressBook()}
+                      />
+                    </div>
                     {rawRecipientList.length > 0 && (
                       <div className="mt-1.5 text-[11px] font-bold">
                         {isResolvingRecipient ? (
@@ -5295,19 +5006,32 @@ export default function Home() {
                   </div>
                 ) : (
                   <div>
-                    <input
-                      type="text"
-                      value={sendAddress}
-                      onChange={(e) => {
-                        setSendAddress(e.target.value);
-                        if (!e.target.value.trim()) {
-                          setResolvedRecipients([]);
-                          setIsResolvingRecipient(false);
-                        }
-                      }}
-                      placeholder="0x... or jubayir.nex"
-                      className={`w-full rounded-2xl border px-4 py-3.5 focus:outline-none transition font-mono text-sm ${tc.inputBg}`}
-                    />
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={sendAddress}
+                        onFocus={() => setSendInputFocused(true)}
+                        onBlur={() => window.setTimeout(() => setSendInputFocused(false), 120)}
+                        onChange={(e) => {
+                          setSendAddress(e.target.value);
+                          setSendInputFocused(true);
+                          if (!e.target.value.trim()) {
+                            setResolvedRecipients([]);
+                            setIsResolvingRecipient(false);
+                          }
+                        }}
+                        placeholder="0x..., name.nex, or search saved contact"
+                        className={`w-full rounded-2xl border px-4 py-3.5 focus:outline-none transition font-mono text-sm ${tc.inputBg}`}
+                      />
+                      <AddressBookAutocomplete
+                        contacts={addressBookContacts}
+                        inputValue={sendAddress}
+                        isBatchMode={false}
+                        open={sendInputFocused}
+                        onSelect={handleSelectAddressBookContact}
+                        onOpenAddressBook={() => void handleOpenAddressBook()}
+                      />
+                    </div>
                     <DomainResolutionBadge
                       resolving={isResolvingRecipient}
                       resolvedDomain={
@@ -5326,6 +5050,27 @@ export default function Home() {
                           : null
                       }
                     />
+                    {singleRecipientPreview?.valid && singleRecipientPreview.address && (
+                      singleRecipientSavedContact ? (
+                        <div className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-emerald-600/35 bg-emerald-50 dark:border-emerald-500/30 dark:bg-emerald-500/10 px-3 py-1 text-[11px] font-extrabold text-emerald-900 dark:text-emerald-300">
+                          <BookUserIcon size={12} />
+                          <span>Whitelisted Contact: {singleRecipientSavedContact.label}</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void handleOpenAddressBook(
+                              singleRecipientPreview.domain || singleRecipientPreview.address || undefined
+                            )
+                          }
+                          className="mt-2 inline-flex items-center gap-1 rounded-xl border border-sky-600/35 dark:border-cyan-500/35 bg-sky-50 dark:bg-cyan-500/10 px-3 py-1 text-[11px] font-extrabold text-sky-900 dark:text-cyan-300 hover:bg-sky-100 dark:hover:bg-cyan-500/20 transition"
+                        >
+                          <PlusIcon size={12} />
+                          <span>Save to On-Chain Address Book</span>
+                        </button>
+                      )
+                    )}
                   </div>
                 )}
               </div>
@@ -5855,6 +5600,24 @@ export default function Home() {
                   </span>
                 </button>
               </div>
+
+              {/* On-Chain Enterprise Address Book Quick Access Strip */}
+              <div className="mt-4 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => void handleOpenAddressBook()}
+                  disabled={chainLocked}
+                  className={`inline-flex items-center gap-2.5 rounded-2xl border px-5 py-3 text-xs sm:text-sm font-black transition-all hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none ${tc.actionCard}`}
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300/80 dark:bg-emerald-500/12 dark:text-emerald-300 dark:border-emerald-500/25">
+                    <BookUserIcon size={15} />
+                  </span>
+                  <span className="text-slate-900 dark:text-white">On-Chain Address Book</span>
+                  <span className="nx-num rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100 dark:bg-cyan-500/12 px-2.5 py-0.5 text-[10px] font-extrabold text-sky-900 dark:text-cyan-300">
+                    {wallet ? `${addressBookContacts.length} Saved` : "Connect Wallet"}
+                  </span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -6380,282 +6143,29 @@ export default function Home() {
           )}
 
           {/* ================================================================
-           * TAB 3: NEXIO SWAP (NEXIO ROUTING ENGINE)
+           * TAB 3: NEXIO SWAP (UNIVERSAL TOKEN SWAP · 5S LIVE QUOTES)
            * ============================================================== */}
           {selectedTab === "swap" && (
-            <div className="nx-enter w-full max-w-lg mx-auto">
-              <div className={`p-5 sm:p-7 rounded-[2rem] border ${tc.solidCardBg}`}>
-                <div className="flex items-start justify-between gap-3 mb-5">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className={`text-2xl sm:text-3xl font-black tracking-tight ${tc.textMain}`}>
-                        Swap
-                      </h2>
-                      <span
-                        className={`nx-num rounded-full border px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider ${
-                          gmProfile.feeBps === 0
-                            ? "border-amber-600/40 dark:border-amber-500/40 bg-amber-100 dark:bg-amber-500/15 text-amber-900 dark:text-amber-300"
-                            : "border-sky-600/35 dark:border-cyan-500/35 bg-sky-100 dark:bg-cyan-500/12 text-sky-900 dark:text-cyan-300"
-                        }`}
-                      >
-                        {unlockedTier ? unlockedTier.name : "Standard"} ·{" "}
-                        {gmProfile.feeBps === 0 ? "0 bps VIP" : `${gmProfile.feeBps} bps`}
-                      </span>
-                    </div>
-                    <p className={`text-xs mt-1 font-bold ${tc.textMuted}`}>
-                      USDC / EURC · Nexio Routing Engine
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <QuoteFreshnessRing
-                      quoting={swapQuoting}
-                      hasQuote={swapQuoteRaw > ZERO && !swapQuoteError}
-                      quoteKey={activeSwapQuoteKey}
-                      ttlMs={SWAP_QUOTE_REFRESH_MS}
-                      onRefresh={() => {
-                        if (!swapAmountIn || isSwapping) return;
-                        setSwapQuoting(true);
-                        setSwapRefreshTick((t) => t + 1);
-                      }}
-                      disabled={!swapAmountIn || isSwapping}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowSlippage((v) => !v)}
-                      className={`nx-num rounded-full px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wider border transition ${tc.subPanelBg} text-slate-900 dark:text-slate-100 hover:border-sky-600 dark:hover:border-cyan-500/40`}
-                    >
-                      Slip {slippageLabel(slippageBps)}
-                    </button>
-                  </div>
-                </div>
-
-                {showSlippage && (
-                  <div className={`nx-enter mb-4 p-3.5 rounded-2xl border ${tc.subPanelBg}`}>
-                    <div
-                      className={`text-[10px] font-extrabold uppercase tracking-widest mb-2 ${tc.textMuted}`}
-                    >
-                      Max Slippage Tolerance (0.01% – 20%)
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {SLIPPAGE_PRESETS.map((bps) => (
-                        <button
-                          key={bps}
-                          type="button"
-                          onClick={() => {
-                            setSlippageBps(bps);
-                            setCustomSlippage("");
-                            if (swapAmountIn) setSwapQuoting(true);
-                          }}
-                          className={`nx-num px-3 py-1.5 rounded-xl text-xs font-black transition border ${
-                            slippageBps === bps && !customSlippage
-                              ? "bg-sky-700 border-sky-700 dark:bg-cyan-500 dark:border-cyan-500 text-white shadow-sm"
-                              : "bg-white border-slate-300 text-slate-800 hover:bg-slate-100 dark:bg-white/10 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/15"
-                          }`}
-                        >
-                          {slippageLabel(bps)}
-                        </button>
-                      ))}
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={customSlippage}
-                        onChange={(e) => {
-                          const val = sanitizeDecimalDraft(e.target.value);
-                          setCustomSlippage(val);
-                          applyCustomSlippage(
-                            val,
-                            (nextBps) => {
-                              setSlippageBps(nextBps);
-                              if (swapAmountIn) setSwapQuoting(true);
-                            },
-                            ACHSWAP_MAX_SLIPPAGE_BPS
-                          );
-                        }}
-                        placeholder="Custom %"
-                        className={`nx-num w-24 rounded-xl border px-3 py-1.5 text-xs font-bold focus:outline-none ${tc.inputBg}`}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-2.5">
-                  {/* Pay Input Box */}
-                  <div className={`rounded-2xl border p-4 ${tc.subPanelBg}`}>
-                    <div className="nx-num flex justify-between items-center mb-2">
-                      <span
-                        className={`text-[11px] font-extrabold uppercase tracking-wider ${tc.textMuted}`}
-                      >
-                        You Pay
-                      </span>
-                      <span className={`text-[11px] font-bold flex items-center gap-2 ${tc.textMuted}`}>
-                        <span>
-                          Bal: {swapDirection === "USDCtoEURC" ? swapUsdcLabel : swapEurcLabel}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={fillSwapMax}
-                          disabled={isSwapping}
-                          className="nx-max-pill"
-                        >
-                          Max
-                        </button>
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={swapInput}
-                        onChange={(e) => handleSwapInputChange(e.target.value)}
-                        placeholder="0.00"
-                        className={`nx-num flex-1 min-w-0 bg-transparent border-none outline-none font-black text-2xl sm:text-3xl ${tc.textMain}`}
-                      />
-                      <span
-                        className={`text-sm sm:text-base font-black shrink-0 px-3 py-1 rounded-xl border bg-white border-slate-300 dark:bg-black/40 dark:border-white/10 ${tc.textMain}`}
-                      >
-                        {swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Interactive Token Flip Control */}
-                  <div className="flex justify-center -my-3">
-                    <SwapFlipButton
-                      direction={swapDirection}
-                      onClick={handleFlipSwapDirection}
-                      disabled={isSwapping}
-                    />
-                  </div>
-
-                  {/* Receive Output Box */}
-                  <div className={`rounded-2xl border p-4 ${tc.subPanelBg}`}>
-                    <div
-                      className={`text-[11px] font-extrabold uppercase tracking-wider mb-2 ${tc.textMuted}`}
-                    >
-                      You Receive (Estimated Output)
-                    </div>
-                    <div className="flex items-end justify-between gap-2">
-                      <div
-                        className={`nx-num font-black text-2xl sm:text-3xl break-all ${tc.textMain}`}
-                      >
-                        {swapQuoting && !swapQuote ? (
-                          <span className="nx-shimmer inline-block h-8 w-32 rounded-lg" />
-                        ) : (
-                          swapQuote || "0.00"
-                        )}
-                      </div>
-                      <span
-                        className={`text-sm sm:text-base font-black shrink-0 px-3 py-1 rounded-xl border bg-white border-slate-300 dark:bg-black/40 dark:border-white/10 ${tc.textMain}`}
-                      >
-                        {swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}
-                      </span>
-                    </div>
-
-                    {swapQuoteRaw > ZERO && (
-                      <div className={`nx-num text-[11px] font-bold mt-2 ${tc.textMuted}`}>
-                        Min received ({slippageLabel(slippageBps)}):{" "}
-                        {formatPretty(swapMinRaw, swapOutDecimals, 6)}{" "}
-                        {swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}
-                        {swapPartnerBps !== null ? ` · Protocol fee ${swapPartnerBps} bps` : ""}
-                      </div>
-                    )}
-
-                    {swapQuoteError && (
-                      <div className="mt-2 flex items-center gap-1.5 text-xs font-bold text-rose-700 dark:text-rose-400">
-                        <AlertTriangleIcon size={14} />
-                        <span>{swapQuoteError}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Route Conduit & Price Impact Guard */}
-                  <SwapRouteConduit
-                    tokenInSymbol={swapDirection === "USDCtoEURC" ? "USDC" : "EURC"}
-                    tokenOutSymbol={swapDirection === "USDCtoEURC" ? "EURC" : "USDC"}
-                    quoting={swapQuoting}
-                    swapping={isSwapping}
-                    hasQuote={swapQuoteRaw > ZERO && !swapQuoteError}
-                    partnerFeeBps={swapPartnerBps ?? (wallet ? gmProfile.feeBps : null)}
-                  />
-
-                  <PriceImpactMeter
-                    priceImpactBps={swapImpactBps}
-                    valueLossBps={swapLossBps}
-                    blocked={Boolean(swapBlockReason)}
-                    blockReason={swapBlockReason || undefined}
-                  />
-
-                  <button
-                    type="button"
-                    onClick={() => (!wallet ? void connectWallet() : void handleSwap())}
-                    disabled={
-                      Boolean(wallet) &&
-                      (chainLocked ||
-                        isSwapping ||
-                        swapQuoting ||
-                        !swapAmountIn ||
-                        swapQuoteRaw <= ZERO ||
-                        Boolean(swapQuoteError) ||
-                        swapInsufficient ||
-                        swapMissingEurcGas ||
-                        Boolean(swapBlockReason))
-                    }
-                    className={`mt-2 inline-flex w-full items-center justify-center gap-2 rounded-2xl py-4 text-base sm:text-lg font-black ${
-                      !wallet
-                        ? "nx-btn-primary"
-                        : swapBlockReason
-                          ? "nx-btn-guard-block"
-                          : swapInsufficient || swapMissingEurcGas
-                            ? "nx-btn-guard-warn"
-                            : swapDirection === "EURCtoUSDC"
-                              ? "nx-btn-emerald"
-                              : "nx-btn-primary"
-                    }`}
-                  >
-                    {!wallet ? (
-                      "Connect Wallet"
-                    ) : chainLocked ? (
-                      "Wrong Network (Switch to 5042)"
-                    ) : isSwapping ? (
-                      <>
-                        <RadarSpinner size={17} />
-                        <span>Executing Swap...</span>
-                      </>
-                    ) : swapQuoting ? (
-                      <>
-                        <RadarSpinner size={17} />
-                        <span>Fetching Live Quote...</span>
-                      </>
-                    ) : swapBlockReason ? (
-                      <>
-                        <LockIcon size={16} />
-                        <span>Swap Blocked by Price Guard</span>
-                      </>
-                    ) : swapInsufficient ? (
-                      `Insufficient ${swapDirection === "USDCtoEURC" ? "USDC" : "EURC"} Balance`
-                    ) : swapMissingEurcGas ? (
-                      "Insufficient Native USDC for Gas"
-                    ) : swapQuoteError === "No route found." ? (
-                      "No Route Found"
-                    ) : swapQuoteError ? (
-                      "Quote Unavailable"
-                    ) : (
-                      `Swap ${swapDirection === "USDCtoEURC" ? "USDC → EURC" : "EURC → USDC"}`
-                    )}
-                  </button>
-
-                  {isSwapping && txLifecycle && (
-                    <TxLifecycleStepper
-                      steps={txLifecycle.steps}
-                      explorerUrl={ARC_EXPLORER}
-                      compact
-                      className="pt-2"
-                    />
-                  )}
-                </div>
-              </div>
-            </div>
+            <SwapModule
+              active={selectedTab === "swap"}
+              wallet={wallet}
+              isArcMainnet={isArcMainnet}
+              chainLocked={chainLocked}
+              streak={streak}
+              usdcBalanceRaw={usdcBalanceRaw}
+              usdcSpendable={usdcSpendable}
+              eurcBalanceRaw={eurcBalanceRaw}
+              txLifecycle={txLifecycle}
+              txBusyRef={txBusyRef}
+              getEthereum={getEthereum}
+              onConnectWallet={connectWallet}
+              onSwitchToArcMainnet={switchToArcMainnet}
+              onShowMessage={showMessage}
+              onSetTxLifecycle={setTxLifecycle}
+              onResetReceiptDismissed={() => setReceiptDrawerDismissed(false)}
+              onSwapBusyChange={setIsSwapping}
+              onSwapFinalized={handleSwapFinalized}
+            />
           )}
 
           {/* ================================================================
@@ -7916,6 +7426,8 @@ export default function Home() {
                   {historyEntries.map((item) => {
                     const memoNote = sessionTxMemos[item.txHash.toLowerCase()];
                     const isNlpClaim = item.kind === "nlp_claim";
+                    const isAddressBookEvent =
+                      item.kind === "contact_saved" || item.kind === "contact_removed";
                     const isIncoming = item.direction === "in";
                     const isOutgoing = item.direction === "out";
                     const amountSign = isIncoming ? "+" : isOutgoing ? "-" : "";
@@ -7930,15 +7442,19 @@ export default function Home() {
                             className={`mt-0.5 sm:mt-0 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border text-xs font-black ${
                               isNlpClaim
                                 ? "border-amber-600/35 bg-amber-100 text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/12 dark:text-amber-300"
-                                : isIncoming
-                                  ? "border-emerald-600/35 bg-emerald-100 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/12 dark:text-emerald-300"
-                                  : isOutgoing
-                                    ? "border-sky-600/35 bg-sky-100 text-sky-800 dark:border-cyan-500/30 dark:bg-cyan-500/12 dark:text-cyan-300"
-                                    : "border-indigo-600/35 bg-indigo-100 text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/12 dark:text-indigo-300"
+                                : isAddressBookEvent
+                                  ? "border-emerald-600/35 bg-emerald-100 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-500/12 dark:text-emerald-300"
+                                  : isIncoming
+                                    ? "border-emerald-600/35 bg-emerald-100 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/12 dark:text-emerald-300"
+                                    : isOutgoing
+                                      ? "border-sky-600/35 bg-sky-100 text-sky-800 dark:border-cyan-500/30 dark:bg-cyan-500/12 dark:text-cyan-300"
+                                      : "border-indigo-600/35 bg-indigo-100 text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/12 dark:text-indigo-300"
                             }`}
                           >
                             {isNlpClaim ? (
                               <SparklesSealIcon size={17} />
+                            ) : isAddressBookEvent ? (
+                              <BookUserIcon size={17} />
                             ) : isIncoming ? (
                               <ReceiveArrowIcon size={17} />
                             ) : isOutgoing ? (
@@ -7961,7 +7477,15 @@ export default function Home() {
                               </span>
                               {item.counterparty && (
                                 <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                                  {isNlpClaim ? "Vault " : isIncoming ? "From " : isOutgoing ? "To " : ""}
+                                  {isNlpClaim
+                                    ? "Vault "
+                                    : isAddressBookEvent
+                                      ? "Contact "
+                                      : isIncoming
+                                        ? "From "
+                                        : isOutgoing
+                                          ? "To "
+                                          : ""}
                                   {item.counterparty.slice(0, 6)}...{item.counterparty.slice(-4)}
                                 </span>
                               )}
