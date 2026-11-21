@@ -321,3 +321,56 @@ export function reconstructDailyNetWorthSeries(input: {
     coveragePartial: input.coveragePartial,
   };
 }
+
+/**
+ * Slices a cached 30D `PortfolioNetWorthSeries` down to the requested timeframe (`7D` or `30D`)
+ * synchronously in memory without triggering any RPC calls. Because daily points are reconstructed
+ * backward from today's live balances (`Previous = Current - NetTransfers`), the trailing 7 points
+ * of the 30D series are mathematically identical to an independent 7D reconstruction.
+ */
+export function sliceNetWorthSeries(
+  series30D: PortfolioNetWorthSeries,
+  days: AnalyticsTimeframeDays
+): PortfolioNetWorthSeries {
+  if (days === 30 || series30D.days === days || series30D.points.length <= days) {
+    return series30D;
+  }
+
+  const points = series30D.points.slice(-days);
+  const startUsd6 = points[0]?.totalUsd6 ?? ZERO;
+  const endUsd6 = points[points.length - 1]?.totalUsd6 ?? ZERO;
+  const deltaUsd6 = endUsd6 - startUsd6;
+
+  let minUsd6 = startUsd6;
+  let maxUsd6 = startUsd6;
+  let totalTxCount = 0;
+
+  for (const pt of points) {
+    if (pt.totalUsd6 < minUsd6) minUsd6 = pt.totalUsd6;
+    if (pt.totalUsd6 > maxUsd6) maxUsd6 = pt.totalUsd6;
+    totalTxCount += pt.txCount;
+  }
+
+  const deltaPct =
+    startUsd6 > ZERO
+      ? (Number(deltaUsd6) / Number(startUsd6)) * 100
+      : endUsd6 > ZERO
+        ? null
+        : 0;
+
+  return {
+    days,
+    points,
+    startUsd6,
+    endUsd6,
+    deltaUsd6,
+    deltaPct,
+    minUsd6,
+    maxUsd6,
+    totalTxCount,
+    hasMovement: maxUsd6 !== minUsd6,
+    coverageFromBlock: series30D.coverageFromBlock,
+    coverageToBlock: series30D.coverageToBlock,
+    coveragePartial: series30D.coveragePartial,
+  };
+}

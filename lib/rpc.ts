@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 
 export const ARC_RPC_CHAIN_ID = 5042;
 export const DEFAULT_ARC_RPC_URL = "https://rpc.mainnet.arc.io";
-export const DEFAULT_RPC_TIMEOUT_MS = 5_000;
+export const DEFAULT_RPC_TIMEOUT_MS = 12_000;
 export const RPC_QUARANTINE_MS = 30_000;
 
 export class RpcTransportError extends Error {
@@ -90,8 +90,7 @@ function getOrCreateEndpoint(url: string): EndpointState {
   const network = new ethers.Network("arc-mainnet", ARC_RPC_CHAIN_ID);
   const provider = new ethers.JsonRpcProvider(url, network, {
     staticNetwork: network,
-    batchMaxCount: 20,
-    batchStallTime: 12,
+    batchMaxCount: 1,
   });
 
   const created: EndpointState = {
@@ -186,10 +185,27 @@ function isDeterministicContractRevert(error: unknown): boolean {
   return false;
 }
 
+export function isRpcBlockRangeLimitError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as {
+    code?: string | number;
+    shortMessage?: string;
+    message?: string;
+    info?: { error?: { code?: number; message?: string } };
+  };
+  const rpcCode = err.info?.error?.code;
+  if (rpcCode === -32005 || rpcCode === -32602) return true;
+  const text = `${err.shortMessage ?? ""} ${err.message ?? ""} ${err.info?.error?.message ?? ""}`;
+  return /block\s*range|max.*blocks|exceed.*block|exceed.*range|exceed.*limit|limit.*exceed|query returned more than|too many results|log response size|range is too large/i.test(
+    text
+  );
+}
+
 export function isLikelyRpcTransportFailure(error: unknown): boolean {
   if (isRpcTransportError(error)) return true;
   if (isAbortLike(error)) return false;
   if (isDeterministicContractRevert(error)) return false;
+  if (isRpcBlockRangeLimitError(error)) return false;
 
   if (!error || typeof error !== "object") return false;
   const err = error as {

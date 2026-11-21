@@ -18,7 +18,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { decodeNexioError } from "@/lib/contracts";
 import { isAbortError } from "@/lib/achswap";
 import {
   fetchStablecoinFlowsForDays,
@@ -28,8 +27,10 @@ import {
 import {
   formatExactUsdFrom6,
   reconstructDailyNetWorthSeries,
+  sliceNetWorthSeries,
   type AnalyticsTimeframeDays,
   type DailyNetWorthPoint,
+  type PortfolioNetWorthSeries,
 } from "@/lib/portfolio-analytics";
 import {
   AlertTriangleIcon,
@@ -60,7 +61,7 @@ function getThemeSnapshot(): "dark" | "light" {
 }
 
 function formatYAxisUsd(value: number): string {
-  if (!Number.isFinite(value)) return "$0";
+  if (!Number.isFinite(value) || value <= 0) return "$0.00";
   const abs = Math.abs(value);
   if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
   if (abs >= 10_000) return `$${(value / 1_000).toFixed(1)}K`;
@@ -204,7 +205,7 @@ export function PortfolioNetWorthChart({
   const isDark = theme === "dark";
 
   const [timeframe, setTimeframe] = useState<AnalyticsTimeframeDays>(7);
-  const [flowHistory, setFlowHistory] = useState<StablecoinFlowHistoryResult | null>(null);
+  const [flowHistory30D, setFlowHistory30D] = useState<StablecoinFlowHistoryResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualReloadSeq, setManualReloadSeq] = useState(0);
@@ -217,10 +218,12 @@ export function PortfolioNetWorthChart({
     setManualReloadSeq((n) => n + 1);
   }, [wallet]);
 
+  // Fetch the full 30D chunked log history once per wallet / refresh cycle.
+  // Switching between '7D' and '30D' toggles strictly slices `cached30DSeries` without RPC calls.
   useEffect(() => {
     if (!wallet || !isArcMainnet) {
       const resetTimer = window.setTimeout(() => {
-        setFlowHistory(null);
+        setFlowHistory30D(null);
         setError(null);
         setLoading(false);
       }, 0);
@@ -234,14 +237,26 @@ export function PortfolioNetWorthChart({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetchStablecoinFlowsForDays(wallet, timeframe, {
+        const res = await fetchStablecoinFlowsForDays(wallet, 30, {
           signal: controller.signal,
         });
         if (gen !== loadGenRef.current || controller.signal.aborted) return;
-        setFlowHistory(res);
+        setFlowHistory30D(res);
       } catch (err) {
         if (isAbortError(err) || gen !== loadGenRef.current) return;
-        setError(decodeNexioError(err));
+        // Flatline fallback: if RPC log scan fails after retries, render current net worth flatline instead of crashing
+        const fallbackNowSec = Math.floor(Date.now() / 1000);
+        setFlowHistory30D((prev) =>
+          prev ?? {
+            flows: [],
+            latestBlock: 0,
+            latestTimestamp: fallbackNowSec,
+            fromBlock: 0,
+            toBlock: 0,
+            partial: true,
+          }
+        );
+        setError(null);
       } finally {
         if (gen === loadGenRef.current) {
           setLoading(false);
@@ -253,24 +268,30 @@ export function PortfolioNetWorthChart({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [wallet, isArcMainnet, timeframe, refreshVersion, manualReloadSeq]);
+  }, [wallet, isArcMainnet, refreshVersion, manualReloadSeq]);
 
   const hasEurcExposure = useMemo(() => {
     if (walletEurc6 > ZERO || vaultEurc6 > ZERO || lpEurc6 > ZERO) return true;
-    if (!flowHistory) return false;
-    return flowHistory.flows.some((f) => f.tokenSymbol === "EURC");
-  }, [walletEurc6, vaultEurc6, lpEurc6, flowHistory]);
+    if (!flowHistory30D) return false;
+    return flowHistory30D.flows.some((f) => f.tokenSymbol === "EURC");
+  }, [walletEurc6, vaultEurc6, lpEurc6, flowHistory30D]);
 
   const awaitingSpot = hasEurcExposure && eurcSpotOut6 === null;
 
-  const series = useMemo(() => {
-    if (!wallet || !isArcMainnet || !flowHistory || awaitingSpot) return null;
+  // Reconstruct and cache the full 30D trajectory from React state (`flowHistory30D`).
+  // Independent of `timeframe`, so switching 7D/30D neither re-fetches RPC logs nor re-runs 30D reconstruction.
+  const cached30DSeries = useMemo((): PortfolioNetWorthSeries | null => {
+    if (!wallet || !isArcMainnet || !flowHistory30D || awaitingSpot) {
+      return null;
+    }
     const effectiveNowSec =
-      chainNowSec > 0 ? chainNowSec : flowHistory.latestTimestamp;
+      chainNowSec > 0
+        ? chainNowSec
+        : flowHistory30D.latestTimestamp;
     if (effectiveNowSec <= 0) return null;
 
     return reconstructDailyNetWorthSeries({
-      days: timeframe,
+      days: 30,
       nowSec: effectiveNowSec,
       current: {
         walletUsdc6,
@@ -281,18 +302,17 @@ export function PortfolioNetWorthChart({
         lpEurc6,
       },
       eurcSpotOut6,
-      flows: flowHistory.flows,
-      coverageFromBlock: flowHistory.fromBlock,
-      coverageToBlock: flowHistory.toBlock,
-      coveragePartial: flowHistory.partial,
+      flows: flowHistory30D.flows,
+      coverageFromBlock: flowHistory30D.fromBlock,
+      coverageToBlock: flowHistory30D.toBlock,
+      coveragePartial: flowHistory30D.partial,
     });
   }, [
     wallet,
     isArcMainnet,
-    flowHistory,
+    flowHistory30D,
     awaitingSpot,
     chainNowSec,
-    timeframe,
     walletUsdc6,
     vaultUsdc6,
     lpUsdc6,
@@ -302,12 +322,18 @@ export function PortfolioNetWorthChart({
     eurcSpotOut6,
   ]);
 
+  // Instantaneous local slice for '7D' vs '30D' toggles (0 new RPC calls)
+  const series = useMemo(() => {
+    if (!wallet || !isArcMainnet || awaitingSpot || !cached30DSeries) return null;
+    return sliceNetWorthSeries(cached30DSeries, timeframe);
+  }, [wallet, isArcMainnet, awaitingSpot, cached30DSeries, timeframe]);
+
   const yDomain = useMemo((): [number, number] => {
     if (!series || series.points.length === 0) return [0, 10];
     const minVal = Number(series.minUsd6) / 1_000_000;
     const maxVal = Number(series.maxUsd6) / 1_000_000;
     if (maxVal === minVal) {
-      if (maxVal <= 0) return [0, 10];
+      if (maxVal <= 0) return [-0.5, 10];
       const pad = Math.max(0.5, maxVal * 0.12);
       return [Math.max(0, minVal - pad), maxVal + pad];
     }
@@ -637,9 +663,15 @@ export function PortfolioNetWorthChart({
 
           <div className="nx-num mt-3 flex flex-wrap items-center justify-between gap-2 text-[11px] font-bold text-slate-600 dark:text-slate-400">
             <span>
-              Verified blocks #{series.coverageFromBlock.toLocaleString()} – #
-              {series.coverageToBlock.toLocaleString()}
-              {series.coveragePartial ? " (recent window cap reached)" : ""}
+              {series.coverageToBlock > 0 ? (
+                <>
+                  Verified blocks #{series.coverageFromBlock.toLocaleString()} – #
+                  {series.coverageToBlock.toLocaleString()}
+                  {series.coveragePartial ? " (recent window cap reached)" : ""}
+                </>
+              ) : (
+                "Verified live on-chain balance snapshot"
+              )}
             </span>
             <span>
               {series.hasMovement

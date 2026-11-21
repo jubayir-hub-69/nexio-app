@@ -4326,9 +4326,9 @@ export default function Home() {
   };
 
   const shareOnX = () => {
-    const appUrl = window.location.origin;
+    const domainName = verifiedIdentityDomain || ".nex";
     const text = encodeURIComponent(
-      `Claimed my permanent ${verifiedIdentityDomain || ".nex"} identity on @Nexio_0.\nEnterprise Stablecoin Banking, Automated Yield Vaults & Permanent .nex Identity on Arc Mainnet.\n\n${appUrl}`
+      `${domainName} is live on @Nexio_0 ✓\n\nVerified on-chain identity for instant stablecoin & multi-token transfers—by name, not 0x addresses.\n\nClaim your Nexio Pass → https://nexio-protocol.vercel.app`
     );
     window.open(`https://twitter.com/intent/tweet?text=${text}`, "_blank", "noopener,noreferrer");
   };

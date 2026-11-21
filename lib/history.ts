@@ -29,13 +29,16 @@ import {
 } from "@/lib/contracts";
 
 export const DEFAULT_HISTORY_WINDOW_BLOCKS = 5_000;
-const MIN_SPLIT_RANGE_BLOCKS = 32;
+export const ANALYTICS_MAX_CHUNK_BLOCKS = 5_000;
+const MIN_SPLIT_RANGE_BLOCKS = 64;
+const MAX_ADAPTIVE_SPLIT_DEPTH = 4;
 const BLOCK_TS_CACHE_MAX = 2_500;
-const RANGE_CHUNK_BLOCKS = 100_000;
-const MAX_CHUNKS_PER_SCAN = 24;
-const MAX_CHUNK_CONCURRENCY = 4;
-const TIMEFRAME_CACHE_MS = 45_000;
+const MAX_CHUNKS_PER_SCAN = 10;
+const CHUNK_RATE_LIMIT_DELAY_MS = 35;
+const TIMEFRAME_CACHE_MS = 60_000;
 const BLOCK_BOUNDARY_CACHE_MS = 300_000;
+
+let learnedSafeChunkBlocks = ANALYTICS_MAX_CHUNK_BLOCKS;
 
 type TrackedTokenMeta = {
   address: string;
@@ -147,7 +150,10 @@ const CONTACT_SAVED_TOPIC = ethers.id("ContactSaved(address,address,string,strin
 const CONTACT_REMOVED_TOPIC = ethers.id("ContactRemoved(address,address,uint64)");
 
 const blockTimestampCache = new Map<number, number>();
-const boundaryBlockCache = new Map<number, { at: number; fromBlock: number; latestBlock: number; latestTs: number }>();
+const boundaryBlockCache = new Map<
+  number,
+  { at: number; fromBlock: number; latestBlock: number; latestTs: number; secPerBlock: number }
+>();
 const stableFlowCache = new Map<string, { at: number; result: StablecoinFlowHistoryResult }>();
 const stableFlowInflight = new Map<string, Promise<StablecoinFlowHistoryResult>>();
 
@@ -189,6 +195,42 @@ function isBlockRangeLimitError(error: unknown): boolean {
   );
 }
 
+function isRateLimitLikeError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const err = error as {
+    status?: number;
+    shortMessage?: string;
+    message?: string;
+    info?: { responseStatus?: string; error?: { code?: number; message?: string } };
+  };
+  if (err.status === 429) return true;
+  const text = `${err.info?.responseStatus ?? ""} ${err.shortMessage ?? ""} ${err.message ?? ""} ${err.info?.error?.message ?? ""}`;
+  return /429|rate.?limit|too many requests|throttle/i.test(text);
+}
+
+function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const abortErr = new Error("Aborted");
+      abortErr.name = "AbortError";
+      reject(abortErr);
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      const abortErr = new Error("Aborted");
+      abortErr.name = "AbortError";
+      reject(abortErr);
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 async function queryLogsAdaptive(
   baseFilter: { address: string | string[]; topics: Array<string | string[] | null> },
   fromBlock: number,
@@ -203,6 +245,22 @@ async function queryLogsAdaptive(
   }
   if (fromBlock > toBlock) return [];
 
+  // Enforce learned safe chunk cap (<= 5,000 blocks per RPC call) via sequential pagination
+  const maxStep = Math.max(500, Math.min(ANALYTICS_MAX_CHUNK_BLOCKS, learnedSafeChunkBlocks));
+  if (depth === 0 && toBlock - fromBlock + 1 > maxStep) {
+    const collected: ethers.Log[] = [];
+    for (let cursor = fromBlock; cursor <= toBlock; ) {
+      const subTo = Math.min(toBlock, cursor + maxStep - 1);
+      const part = await queryLogsAdaptive(baseFilter, cursor, subTo, signal, 0);
+      collected.push(...part);
+      cursor = subTo + 1;
+      if (cursor <= toBlock) {
+        await sleepAbortable(CHUNK_RATE_LIMIT_DELAY_MS, signal);
+      }
+    }
+    return collected;
+  }
+
   try {
     return await withArcRpc(
       (provider) =>
@@ -212,22 +270,31 @@ async function queryLogsAdaptive(
           fromBlock,
           toBlock,
         }),
-      { signal }
+      { signal, timeoutMs: 12_000 }
     );
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") throw error;
 
     const span = toBlock - fromBlock;
     if (
-      depth < 12 &&
+      depth < MAX_ADAPTIVE_SPLIT_DEPTH &&
       span >= MIN_SPLIT_RANGE_BLOCKS &&
-      (isBlockRangeLimitError(error) || isRpcTransportError(error))
+      (isBlockRangeLimitError(error) || isRpcTransportError(error) || isRateLimitLikeError(error))
     ) {
       const mid = Math.floor((fromBlock + toBlock) / 2);
-      const [left, right] = await Promise.all([
-        queryLogsAdaptive(baseFilter, fromBlock, mid, signal, depth + 1),
-        queryLogsAdaptive(baseFilter, mid + 1, toBlock, signal, depth + 1),
-      ]);
+      if (isBlockRangeLimitError(error)) {
+        learnedSafeChunkBlocks = Math.max(
+          500,
+          Math.min(learnedSafeChunkBlocks, mid - fromBlock + 1)
+        );
+      }
+      if (isRateLimitLikeError(error) || isRpcTransportError(error)) {
+        await sleepAbortable(180 * (depth + 1), signal);
+      }
+      // Sequential split prevents exponential parallel RPC storms under rate limits
+      const left = await queryLogsAdaptive(baseFilter, fromBlock, mid, signal, depth + 1);
+      await sleepAbortable(CHUNK_RATE_LIMIT_DELAY_MS, signal);
+      const right = await queryLogsAdaptive(baseFilter, mid + 1, toBlock, signal, depth + 1);
       return [...left, ...right];
     }
     throw error;
@@ -241,7 +308,7 @@ async function hydrateBlockTimestamps(
   const missing = Array.from(new Set(blockNumbers)).filter((bn) => !blockTimestampCache.has(bn));
   if (missing.length === 0) return;
 
-  const chunkSize = 12;
+  const chunkSize = 4;
   for (let i = 0; i < missing.length; i += chunkSize) {
     if (signal?.aborted) {
       const abortErr = new Error("Aborted");
@@ -262,6 +329,9 @@ async function hydrateBlockTimestamps(
       },
       { signal }
     ).catch(() => undefined);
+    if (i + chunkSize < missing.length) {
+      await sleepAbortable(25, signal);
+    }
   }
 }
 
@@ -747,83 +817,80 @@ export function invalidateStablecoinFlowCache(wallet?: string) {
 async function resolveTimeframeStartBlock(
   days: number,
   signal?: AbortSignal
-): Promise<{ fromBlock: number; latestBlock: number; latestTs: number }> {
+): Promise<{ fromBlock: number; latestBlock: number; latestTs: number; secPerBlock: number }> {
   const cached = boundaryBlockCache.get(days);
   if (cached && Date.now() - cached.at < BLOCK_BOUNDARY_CACHE_MS) {
     return {
       fromBlock: cached.fromBlock,
       latestBlock: cached.latestBlock,
       latestTs: cached.latestTs,
+      secPerBlock: cached.secPerBlock,
     };
   }
 
-  const latestBlk = await withArcRpc((p) => p.getBlock("latest"), { signal });
-  if (!latestBlk || typeof latestBlk.number !== "number" || latestBlk.number <= 0) {
-    return { fromBlock: 0, latestBlock: 0, latestTs: Math.floor(Date.now() / 1000) };
+  const nowWallSec = Math.floor(Date.now() / 1000);
+  const latestBlk = await withArcRpc((p) => p.getBlock("latest"), {
+    signal,
+    timeoutMs: 10_000,
+  }).catch(() => null);
+
+  let latestBlock = latestBlk && typeof latestBlk.number === "number" ? latestBlk.number : 0;
+  if (latestBlock <= 0) {
+    latestBlock = await withArcRpc((p) => p.getBlockNumber(), {
+      signal,
+      timeoutMs: 10_000,
+    }).catch(() => 0);
+  }
+  if (latestBlock <= 0) {
+    return { fromBlock: 0, latestBlock: 0, latestTs: nowWallSec, secPerBlock: 2.0 };
   }
 
-  const latestBlock = latestBlk.number;
   const latestTs =
-    typeof latestBlk.timestamp === "number" && latestBlk.timestamp > 0
+    latestBlk && typeof latestBlk.timestamp === "number" && latestBlk.timestamp > 0
       ? latestBlk.timestamp
-      : Math.floor(Date.now() / 1000);
+      : nowWallSec;
   rememberBlockTimestamp(latestBlock, latestTs);
 
   // Align cutoff to the start of the earliest UTC calendar day in the window
   const todayUtcStart = Math.floor(latestTs / 86_400) * 86_400;
   const targetTs = Math.max(0, todayUtcStart - (days - 1) * 86_400);
 
-  // Empirical block-time probe so secant/binary search converges in ~4-8 RPC calls
-  const probeDelta = Math.min(25_000, Math.max(100, Math.floor(latestBlock / 4)));
-  const probeNum = Math.max(1, latestBlock - probeDelta);
-  const probeBlk = await withArcRpc((p) => p.getBlock(probeNum), { signal }).catch(() => null);
+  // Single empirical block-time probe (max 5,000 blocks back) avoids 12+ sequential getBlock calls
+  let secPerBlock = 2.0;
+  if (latestBlock > 100) {
+    const probeDelta = Math.min(ANALYTICS_MAX_CHUNK_BLOCKS, Math.max(100, Math.floor(latestBlock / 2)));
+    const probeNum = Math.max(1, latestBlock - probeDelta);
+    const probeBlk = await withArcRpc((p) => p.getBlock(probeNum), {
+      signal,
+      timeoutMs: 8_000,
+    }).catch(() => null);
 
-  let low = 0;
-  let high = latestBlock;
-
-  if (probeBlk && typeof probeBlk.timestamp === "number" && probeBlk.timestamp < latestTs) {
-    rememberBlockTimestamp(probeNum, probeBlk.timestamp);
-    const secPerBlock = Math.max(0.05, (latestTs - probeBlk.timestamp) / (latestBlock - probeNum));
-    const estBlocksBack = Math.ceil((latestTs - targetTs) / secPerBlock);
-    const estBlock = Math.max(0, latestBlock - estBlocksBack);
-
-    const estBlk = await withArcRpc((p) => p.getBlock(estBlock), { signal }).catch(() => null);
-    if (estBlk && typeof estBlk.timestamp === "number") {
-      rememberBlockTimestamp(estBlock, estBlk.timestamp);
-      if (estBlk.timestamp <= targetTs) {
-        low = estBlock;
-      } else {
-        high = estBlock;
-        low = Math.max(0, estBlock - Math.ceil(estBlocksBack * 0.6));
-      }
+    if (probeBlk && typeof probeBlk.timestamp === "number" && probeBlk.timestamp < latestTs) {
+      rememberBlockTimestamp(probeNum, probeBlk.timestamp);
+      secPerBlock = Math.max(
+        0.2,
+        (latestTs - probeBlk.timestamp) / Math.max(1, latestBlock - probeNum)
+      );
     }
   }
 
-  for (let iter = 0; iter < 12 && high - low > 32; iter++) {
-    if (signal?.aborted) {
-      const abortErr = new Error("Aborted");
-      abortErr.name = "AbortError";
-      throw abortErr;
-    }
-    const mid = Math.floor((low + high) / 2);
-    const blk = await withArcRpc((p) => p.getBlock(mid), { signal }).catch(() => null);
-    if (!blk || typeof blk.timestamp !== "number") break;
-    rememberBlockTimestamp(mid, blk.timestamp);
-    if (blk.timestamp < targetTs) {
-      low = mid;
-    } else {
-      high = mid;
-    }
-  }
+  const estBlocksBack = Math.ceil(Math.max(0, latestTs - targetTs) / secPerBlock);
+  const fromBlock = Math.max(0, latestBlock - estBlocksBack);
 
-  const fromBlock = Math.max(0, low);
-  boundaryBlockCache.set(days, { at: Date.now(), fromBlock, latestBlock, latestTs });
-  return { fromBlock, latestBlock, latestTs };
+  boundaryBlockCache.set(days, {
+    at: Date.now(),
+    fromBlock,
+    latestBlock,
+    latestTs,
+    secPerBlock,
+  });
+  return { fromBlock, latestBlock, latestTs, secPerBlock };
 }
 
 /**
- * Queries strictly on-chain USDC & EURC Transfer logs for `wallet` covering the full `7D` or `30D`
- * UTC window on Arc Mainnet using empirically resolved block boundaries and bounded chunk concurrency.
+ * Queries strictly on-chain USDC & EURC Transfer logs for `wallet` covering the `7D` or `30D`
+ * UTC window on Arc Mainnet using safe <= 5,000-block chunk pagination and iterative rate-limit
+ * protection.
  */
 export async function fetchStablecoinFlowsForDays(
   wallet: string,
@@ -846,21 +913,37 @@ export async function fetchStablecoinFlowsForDays(
   const checksummedWallet = ethers.getAddress(trimmed);
   const walletLower = checksummedWallet.toLowerCase();
   const cacheKey = `${walletLower}:${days}`;
+  const cacheKey30 = `${walletLower}:30`;
 
   if (!opts?.force) {
     const hit = stableFlowCache.get(cacheKey);
     if (hit && Date.now() - hit.at < TIMEFRAME_CACHE_MS) {
       return hit.result;
     }
+    // If 30D flows are already cached, slice 7D directly from the cached 30D logs with zero RPC calls
+    if (days === 7) {
+      const hit30 = stableFlowCache.get(cacheKey30);
+      if (hit30 && Date.now() - hit30.at < TIMEFRAME_CACHE_MS) {
+        const todayUtcStart = Math.floor(hit30.result.latestTimestamp / 86_400) * 86_400;
+        const cutoff7D = Math.max(0, todayUtcStart - 6 * 86_400);
+        const slicedResult: StablecoinFlowHistoryResult = {
+          ...hit30.result,
+          flows: hit30.result.flows.filter((f) => f.timestamp >= cutoff7D),
+        };
+        stableFlowCache.set(cacheKey, { at: hit30.at, result: slicedResult });
+        return slicedResult;
+      }
+    }
     const pending = stableFlowInflight.get(cacheKey);
     if (pending) return pending;
   }
 
   const job = (async (): Promise<StablecoinFlowHistoryResult> => {
-    const [{ fromBlock: targetFromBlock, latestBlock, latestTs }, pairState] = await Promise.all([
-      resolveTimeframeStartBlock(days, opts?.signal),
-      fetchPairState(undefined, EURC_ADDRESS).catch(() => null),
-    ]);
+    const [{ fromBlock: targetFromBlock, latestBlock, latestTs, secPerBlock }, pairState] =
+      await Promise.all([
+        resolveTimeframeStartBlock(days, opts?.signal),
+        fetchPairState(undefined, EURC_ADDRESS).catch(() => null),
+      ]);
 
     if (latestBlock <= 0) {
       return {
@@ -876,50 +959,93 @@ export async function fetchStablecoinFlowsForDays(
     const paddedWallet = ethers.zeroPadValue(checksummedWallet, 32);
     const stableTokens = [USDC_ERC20_ADDRESS, EURC_ADDRESS];
 
+    // Divide target block range into safe chunks of at most 5,000 blocks per RPC call
+    const chunkSize = Math.max(500, Math.min(ANALYTICS_MAX_CHUNK_BLOCKS, learnedSafeChunkBlocks));
+    const maxCoveredSpan = chunkSize * MAX_CHUNKS_PER_SCAN;
     const totalSpan = Math.max(1, latestBlock - targetFromBlock + 1);
-    const maxCoveredSpan = RANGE_CHUNK_BLOCKS * MAX_CHUNKS_PER_SCAN;
     const effectiveFromBlock =
-      totalSpan > maxCoveredSpan ? Math.max(0, latestBlock - maxCoveredSpan + 1) : targetFromBlock;
-    const partial = effectiveFromBlock > targetFromBlock;
+      totalSpan > maxCoveredSpan
+        ? Math.max(0, latestBlock - maxCoveredSpan + 1)
+        : targetFromBlock;
+    let partial = effectiveFromBlock > targetFromBlock;
 
     const ranges: Array<{ from: number; to: number }> = [];
     for (let cursor = latestBlock; cursor >= effectiveFromBlock; ) {
-      const start = Math.max(effectiveFromBlock, cursor - RANGE_CHUNK_BLOCKS + 1);
+      const start = Math.max(effectiveFromBlock, cursor - chunkSize + 1);
       ranges.push({ from: start, to: cursor });
       cursor = start - 1;
     }
 
+    // Rate-limit protection: fetch chunked requests iteratively (at most 1 chunk's in/out pair at a time)
     const allLogs: ethers.Log[] = [];
-    for (let i = 0; i < ranges.length; i += MAX_CHUNK_CONCURRENCY) {
+    let verifiedChunks = 0;
+    let lowestVerifiedFromBlock = latestBlock;
+
+    for (let i = 0; i < ranges.length; i++) {
       if (opts?.signal?.aborted) {
         const abortErr = new Error("Aborted");
         abortErr.name = "AbortError";
         throw abortErr;
       }
-      const batch = ranges.slice(i, i + MAX_CHUNK_CONCURRENCY);
-      const batchLogs = await Promise.all(
-        batch.map(async (r) => {
-          const [outLogs, inLogs] = await Promise.all([
-            queryLogsAdaptive(
-              { address: stableTokens, topics: [TRANSFER_TOPIC, paddedWallet] },
-              r.from,
-              r.to,
-              opts?.signal
-            ),
-            queryLogsAdaptive(
-              { address: stableTokens, topics: [TRANSFER_TOPIC, null, paddedWallet] },
-              r.from,
-              r.to,
-              opts?.signal
-            ),
-          ]);
-          return [...outLogs, ...inLogs];
-        })
-      );
-      for (const list of batchLogs) {
-        allLogs.push(...list);
+
+      const r = ranges[i];
+      try {
+        const [outLogs, inLogs] = await Promise.all([
+          queryLogsAdaptive(
+            { address: stableTokens, topics: [TRANSFER_TOPIC, paddedWallet] },
+            r.from,
+            r.to,
+            opts?.signal
+          ),
+          queryLogsAdaptive(
+            { address: stableTokens, topics: [TRANSFER_TOPIC, null, paddedWallet] },
+            r.from,
+            r.to,
+            opts?.signal
+          ),
+        ]);
+        allLogs.push(...outLogs, ...inLogs);
+        verifiedChunks += 1;
+        lowestVerifiedFromBlock = r.from;
+      } catch (chunkErr) {
+        if (chunkErr instanceof Error && chunkErr.name === "AbortError") {
+          throw chunkErr;
+        }
+        // Fallback: retry outgoing and incoming sequentially after cooldown if parallel pair hit rate limit
+        await sleepAbortable(250, opts?.signal);
+        try {
+          const outLogs = await queryLogsAdaptive(
+            { address: stableTokens, topics: [TRANSFER_TOPIC, paddedWallet] },
+            r.from,
+            r.to,
+            opts?.signal
+          );
+          await sleepAbortable(CHUNK_RATE_LIMIT_DELAY_MS, opts?.signal);
+          const inLogs = await queryLogsAdaptive(
+            { address: stableTokens, topics: [TRANSFER_TOPIC, null, paddedWallet] },
+            r.from,
+            r.to,
+            opts?.signal
+          );
+          allLogs.push(...outLogs, ...inLogs);
+          verifiedChunks += 1;
+          lowestVerifiedFromBlock = r.from;
+        } catch (seqErr) {
+          if (seqErr instanceof Error && seqErr.name === "AbortError") {
+            throw seqErr;
+          }
+          // Preserve already-verified recent chunks or degrade gracefully to flatline fallback
+          partial = true;
+          break;
+        }
+      }
+
+      if (i + 1 < ranges.length) {
+        await sleepAbortable(CHUNK_RATE_LIMIT_DELAY_MS, opts?.signal);
       }
     }
+
+    const actualFromBlock = verifiedChunks > 0 ? lowestVerifiedFromBlock : effectiveFromBlock;
 
     const seenIds = new Set<string>();
     const decoded: DecodedTransferRecord[] = [];
@@ -956,10 +1082,12 @@ export async function fetchStablecoinFlowsForDays(
       }
     }
 
-    await hydrateBlockTimestamps(
-      decoded.map((d) => d.blockNumber),
-      opts?.signal
-    );
+    if (decoded.length > 0) {
+      await hydrateBlockTimestamps(
+        decoded.map((d) => d.blockNumber),
+        opts?.signal
+      );
+    }
 
     const txGroups = new Map<string, DecodedTransferRecord[]>();
     for (const rec of decoded) {
@@ -987,8 +1115,14 @@ export async function fetchStablecoinFlowsForDays(
 
     const flows: StablecoinFlowEvent[] = [];
     for (const rec of decoded) {
-      const ts = blockTimestampCache.get(rec.blockNumber);
-      if (ts === undefined || ts <= 0) continue;
+      const cachedTs = blockTimestampCache.get(rec.blockNumber);
+      const ts =
+        cachedTs !== undefined && cachedTs > 0
+          ? cachedTs
+          : Math.max(
+              1,
+              Math.round(latestTs - Math.max(0, latestBlock - rec.blockNumber) * secPerBlock)
+            );
 
       const siblings = txGroups.get(rec.txHash.toLowerCase()) ?? [rec];
       const isOutgoing = rec.from.toLowerCase() === walletLower;
@@ -1027,12 +1161,24 @@ export async function fetchStablecoinFlowsForDays(
       flows,
       latestBlock,
       latestTimestamp: latestTs,
-      fromBlock: effectiveFromBlock,
+      fromBlock: actualFromBlock,
       toBlock: latestBlock,
       partial,
     };
 
-    stableFlowCache.set(cacheKey, { at: Date.now(), result });
+    const nowMs = Date.now();
+    stableFlowCache.set(cacheKey, { at: nowMs, result });
+    if (days === 30) {
+      const todayUtcStart = Math.floor(latestTs / 86_400) * 86_400;
+      const cutoff7D = Math.max(0, todayUtcStart - 6 * 86_400);
+      stableFlowCache.set(`${walletLower}:7`, {
+        at: nowMs,
+        result: {
+          ...result,
+          flows: flows.filter((f) => f.timestamp >= cutoff7D),
+        },
+      });
+    }
     return result;
   })().finally(() => {
     if (stableFlowInflight.get(cacheKey) === job) {
