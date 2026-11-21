@@ -79,6 +79,10 @@ function resolveHashChapter(hash: string): ChapterId | null {
   return HASH_ALIASES[clean] ?? null;
 }
 
+function specAddressById(id: string): string {
+  return CONTRACT_SPECS.find((c) => c.id === id)?.address ?? "";
+}
+
 function CopyTextButton({
   value,
   label = "Copy",
@@ -275,7 +279,7 @@ function ArchRoutingProxySvg() {
       <text x="312" y="105" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="10">20 / 10 / 5 / 0 bps Tiers</text>
       <text x="312" y="123" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="10">3s dedup · 429 [0,400,900ms]</text>
       <text x="312" y="141" textAnchor="middle" fill="var(--nx-doc-emerald-fg)" fontSize="10">Fee 400/422 → retry 0 bps</text>
-      <text x="312" y="161" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5" fontFamily="monospace">60 req/60s IP · 8s timeout</text>
+      <text x="312" y="161" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5" fontFamily="monospace">120 req/60s IP · 5s quotes</text>
 
       <rect x="454" y="48" width="144" height="116" rx="14" fill="var(--nx-doc-node)" stroke="var(--nx-doc-emerald)" strokeWidth="1.5" />
       <text x="526" y="74" textAnchor="middle" fill="var(--nx-doc-fg)" fontSize="12" fontWeight="700">Routing Engine</text>
@@ -333,9 +337,9 @@ function ArchMulticallReadsSvg() {
       <text x="647" y="86" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5">Zero stale cross-wallet BigInt leak</text>
 
       <rect x="536" y="116" width="222" height="72" rx="12" fill="var(--nx-doc-node)" stroke="var(--nx-doc-amber)" strokeWidth="1.5" />
-      <text x="647" y="140" textAnchor="middle" fill="var(--nx-doc-fg)" fontSize="11.5" fontWeight="700">Adaptive eth_getLogs Scanner</text>
-      <text x="647" y="158" textAnchor="middle" fill="var(--nx-doc-amber-fg)" fontSize="10">5,000-block window + range halving</text>
-      <text x="647" y="174" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5">Transfer · NLPClaimed · CheckedIn · ANS</text>
+      <text x="647" y="140" textAnchor="middle" fill="var(--nx-doc-fg)" fontSize="11.5" fontWeight="700">eth_getLogs · 7D/30D · CSV</text>
+      <text x="647" y="158" textAnchor="middle" fill="var(--nx-doc-amber-fg)" fontSize="10">Adaptive chunks + UTC analytics</text>
+      <text x="647" y="174" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5">Transfers · NLP · GM · ANS · Book</text>
 
       <line x1="194" y1="108" x2="248" y2="108" stroke="var(--nx-doc-cyan)" strokeWidth="1.75" className="nx-doc-dash" />
       <path d="M 482 84 C 508 84, 510 64, 536 64" fill="none" stroke="var(--nx-doc-cyan)" strokeWidth="1.75" className="nx-doc-dash" />
@@ -422,15 +426,26 @@ export default function Documentation({ theme }: DocumentationProps = {}) {
   const pillSecondaryClass =
     "border-slate-300 bg-white text-slate-800 hover:border-sky-700 hover:bg-slate-100 hover:text-slate-950 dark:border-white/15 dark:bg-white/5 dark:text-slate-100 dark:hover:bg-white/10";
 
+  const usdcAddr = specAddressById("usdc");
+  const eurcAddr = specAddressById("eurc");
+  const ansAddr = specAddressById("ans");
+  const dailyGmAddr = specAddressById("daily-gm");
+  const usdcVaultAddr = specAddressById("usdc-vault");
+  const eurcVaultAddr = specAddressById("eurc-vault");
+  const nexioSwapAddr = specAddressById("nexio-swap");
+  const addressBookAddr = specAddressById("address-book");
+  const v2RouterAddr = specAddressById("v2-router");
+
   const envSnippet = `# .env.local (Next.js server credentials & public address overrides — gitignored)
 ACHSWAP_API_KEY=your_server_routing_api_key
 ACHSWAP_FEE_RECIPIENT=${NETWORK_SPEC.defaultFeeRecipient}
 
-NEXT_PUBLIC_ANS_ADDRESS=${CONTRACT_SPECS[2].address}
-NEXT_PUBLIC_DAILY_GM_ADDRESS=${CONTRACT_SPECS[3].address}
-NEXT_PUBLIC_USDC_VAULT_ADDRESS=${CONTRACT_SPECS[4].address}
-NEXT_PUBLIC_EURC_VAULT_ADDRESS=${CONTRACT_SPECS[5].address}
-NEXT_PUBLIC_NEXIO_SWAP_ADDRESS=${CONTRACT_SPECS[6].address}
+NEXT_PUBLIC_ANS_ADDRESS=${ansAddr}
+NEXT_PUBLIC_DAILY_GM_ADDRESS=${dailyGmAddr}
+NEXT_PUBLIC_USDC_VAULT_ADDRESS=${usdcVaultAddr}
+NEXT_PUBLIC_EURC_VAULT_ADDRESS=${eurcVaultAddr}
+NEXT_PUBLIC_NEXIO_SWAP_ADDRESS=${nexioSwapAddr}
+NEXT_PUBLIC_ADDRESS_BOOK_ADDRESS=${addressBookAddr}
 
 # .env.hardhat (Hardhat CLI deployments ONLY — never loaded into Next.js server memory)
 PRIVATE_KEY=0xYOUR_64_HEX_DEPLOYER_PRIVATE_KEY`;
@@ -447,12 +462,15 @@ Copy-Item .env.example .env.local
 npm run typecheck
 npm run dev`;
 
+  const curlTokensSnippet = `curl -X GET "http://localhost:3000/api/achswap/tokens?chainId=5042&q=USDC" \\
+  -H "Accept: application/json"`;
+
   const curlQuoteSnippet = `curl -X POST http://localhost:3000/api/achswap/quote \\
   -H "Content-Type: application/json" \\
   -d '{
     "chainId": 5042,
-    "tokenIn": "${CONTRACT_SPECS[1].address}",
-    "tokenOut": "${CONTRACT_SPECS[0].address}",
+    "tokenIn": "${eurcAddr}",
+    "tokenOut": "${usdcAddr}",
     "amountIn": "1000000",
     "slippageBps": 50,
     "spotOnly": true
@@ -462,8 +480,8 @@ npm run dev`;
   -H "Content-Type: application/json" \\
   -d '{
     "chainId": 5042,
-    "tokenIn": "${CONTRACT_SPECS[0].address}",
-    "tokenOut": "${CONTRACT_SPECS[1].address}",
+    "tokenIn": "${usdcAddr}",
+    "tokenOut": "${eurcAddr}",
     "amountIn": "25000000",
     "slippageBps": 100,
     "sender": "0xYourConnectedArcWalletAddress",
@@ -581,11 +599,11 @@ npm run dev`;
         </h2>
         <p className={`mt-3 max-w-3xl text-sm leading-relaxed ${mutedTextClass}`}>
           {NETWORK_SPEC.tagline}. Canonical specification covering shared 18-decimal native and 6-decimal ERC-20{" "}
-          <InlineCode>USDC</InlineCode> accounting, pure two-sided market spot valuation, exact{" "}
-          <InlineCode>10.00 NLP / $100 / 24h</InlineCode> automated vaults with on-chain{" "}
-          <InlineCode>claimNLP()</InlineCode>, consecutive 48-hour <InlineCode>DailyGM</InlineCode> tiers (
-          <InlineCode>30D</InlineCode> / <InlineCode>90D</InlineCode> / <InlineCode>180D VIP</InlineCode>), and permanent{" "}
-          <InlineCode>.nex</InlineCode> sovereign identity recovery.
+          <InlineCode>USDC</InlineCode> accounting, universal multi-token swaps with 5-second live quotes, wallet-scoped{" "}
+          <InlineCode>NexioAddressBook</InlineCode> whitelisting, 7D/30D on-chain Net Worth analytics, client-side CSV accounting exports, exact{" "}
+          <InlineCode>10.00 NLP / $100 / 24h</InlineCode> vaults with <InlineCode>claimNLP()</InlineCode>, consecutive 48-hour{" "}
+          <InlineCode>DailyGM</InlineCode> tiers (<InlineCode>30D</InlineCode> / <InlineCode>90D</InlineCode> /{" "}
+          <InlineCode>180D VIP</InlineCode>), and permanent <InlineCode>.nex</InlineCode> identity recovery.
         </p>
 
         <div className="mt-5 flex flex-wrap items-center gap-2.5">
@@ -799,7 +817,7 @@ npm run dev`;
                 <div className="font-black">Shared USDC Precompile &amp; Pure Two-Sided Market Spot</div>
                 <p className="mt-1.5">
                   On Arc Mainnet, native gas <InlineCode>USDC</InlineCode> (<InlineCode>18</InlineCode> decimals via{" "}
-                  <InlineCode>eth_getBalance</InlineCode>) and ERC-20 <InlineCode>{CONTRACT_SPECS[0].address}</InlineCode> (
+                  <InlineCode>eth_getBalance</InlineCode>) and ERC-20 <InlineCode>{usdcAddr}</InlineCode> (
                   <InlineCode>6</InlineCode> decimals) expose <strong>one shared account balance</strong> scaled by{" "}
                   <InlineCode>10^12</InlineCode>. Meanwhile, <InlineCode>EURC</InlineCode> valuations query parallel{" "}
                   <InlineCode>1 EURC -&gt; USDC</InlineCode> and <InlineCode>1 USDC -&gt; EURC</InlineCode> quotes with{" "}
@@ -945,29 +963,35 @@ npm run dev`;
                     Server-Isolated Execution Pipeline
                   </div>
                   <h3 className="mt-1 text-xl font-black tracking-tight">
-                    Swap Routing Proxy Schemas (<InlineCode>/api/achswap/quote</InlineCode> &amp;{" "}
-                    <InlineCode>/api/achswap/swap</InlineCode>)
+                    Swap Routing Proxy Schemas (<InlineCode>/api/achswap/tokens</InlineCode>,{" "}
+                    <InlineCode>/quote</InlineCode> &amp; <InlineCode>/swap</InlineCode>)
                   </h3>
                 </div>
 
                 <MotionGraphicFrame
                   src={DOCS_MOTION_SVGS.swap}
                   alt="Nexio Swap Execution Pipeline animated flow"
-                  caption="Protected swap execution: pure two-sided spot & consecutive streak fee lookup, single-pass dynamic spender tx.wait(1) gate, <=5% impact guard, and pre-simulated settlement."
+                  caption="Protected universal swap execution: dynamic Arc Mainnet token discovery, strict 5s AbortController quote auto-refresh, pure 0-fee spot, streak discounts, and pre-simulated settlement."
                 />
 
-                <div className="grid gap-3 md:grid-cols-2 text-xs leading-relaxed">
+                <div className="grid gap-3 md:grid-cols-3 text-xs leading-relaxed">
                   <div className={subCardClass}>
-                    <div className="font-black">Pure Two-Sided Spot &amp; 3s Quote Deduplication</div>
+                    <div className="font-black">Dynamic Token Discovery &amp; Anti-Spoof</div>
+                    <p className={`mt-1.5 ${mutedTextClass}`}>{ROUTING_API_SPEC.tokenDiscoveryPolicy}</p>
+                  </div>
+                  <div className={subCardClass}>
+                    <div className="font-black">Pure Spot, 5s Refresh &amp; 3s Dedupe</div>
                     <p className={`mt-1.5 ${mutedTextClass}`}>{ROUTING_API_SPEC.pureSpotPolicy}</p>
                     <p className={`mt-2 ${mutedTextClass}`}>{ROUTING_API_SPEC.quoteCachePolicy}</p>
                   </div>
                   <div className={subCardClass}>
-                    <div className="font-black">Consecutive 48h Streak Fee &amp; Targeted 0-bps Fallback</div>
+                    <div className="font-black">Consecutive 48h Streak Fee &amp; 0-bps Fallback</div>
                     <p className={`mt-1.5 ${mutedTextClass}`}>{ROUTING_API_SPEC.streakLookupPolicy}</p>
                     <p className={`mt-2 ${mutedTextClass}`}>{ROUTING_API_SPEC.feeFallbackPolicy}</p>
                   </div>
                 </div>
+
+                <CodeSnippet title="GET /api/achswap/tokens (Verified & On-Chain Token Discovery)" language="bash" code={curlTokensSnippet} />
 
                 <div className="grid gap-4 lg:grid-cols-2">
                   <CodeSnippet title="POST /api/achswap/quote (Pure Spot Reference)" language="bash" code={curlQuoteSnippet} />
@@ -1079,7 +1103,7 @@ npm run dev`;
                 <CodeSnippet
                   title="Revert-Safe Bidirectional Identity Verification Pattern"
                   language="typescript"
-                  code={`const ans = new ethers.Contract("${CONTRACT_SPECS[2].address}", ANS_ABI, provider);
+                  code={`const ans = new ethers.Contract("${ansAddr}", ANS_ABI, provider);
 
 // 1. Safe Reverse Recovery (survives cleared browser localStorage)
 const owns = await ans.hasDomain(wallet);
@@ -1122,12 +1146,12 @@ if (owns) {
                   caption="V2 Liquidity Guard: compares pool reserve ratio against pure two-sided live market spot, locking addLiquidity above ±5.00% (500 bps) while keeping removeLiquidity open."
                 />
 
-                <div className="grid gap-4 md:grid-cols-2 text-xs leading-relaxed">
+                <div className="grid gap-4 md:grid-cols-3 text-xs leading-relaxed">
                   <div className={`${subCardClass} space-y-2`}>
                     <div className="text-sm font-black">Exact 1e18 NLP Point Math &amp; On-Chain Settlement</div>
                     <p className={mutedTextClass}>
-                      <InlineCode>NexioUSDCVault</InlineCode> (<InlineCode>{CONTRACT_SPECS[4].address}</InlineCode>) and{" "}
-                      <InlineCode>NexioVault [EURC]</InlineCode> (<InlineCode>{CONTRACT_SPECS[5].address}</InlineCode>) custody 6-decimal principal with{" "}
+                      <InlineCode>NexioUSDCVault</InlineCode> (<InlineCode>{usdcVaultAddr}</InlineCode>) and{" "}
+                      <InlineCode>NexioVault [EURC]</InlineCode> (<InlineCode>{eurcVaultAddr}</InlineCode>) custody 6-decimal principal with{" "}
                       <InlineCode>nonReentrant</InlineCode> protection and return exact <strong>1:1 principal</strong> on{" "}
                       <InlineCode>withdraw(amount)</InlineCode>.
                     </p>
@@ -1142,9 +1166,20 @@ if (owns) {
                   </div>
 
                   <div className={`${subCardClass} space-y-2`}>
+                    <div className="text-sm font-black">7D / 30D On-Chain Net Worth Analytics</div>
+                    <p className={mutedTextClass}>
+                      <InlineCode>lib/portfolio-analytics.ts</InlineCode> reconstructs daily UTC end-of-day snapshots backward from verified Wallet, Vault, and LP balances using{" "}
+                      <InlineCode>eth_getLogs</InlineCode> (<InlineCode>Previous = Current - NetTransfers(day)</InlineCode>).
+                    </p>
+                    <p className={mutedTextClass}>
+                      Internal Vault stakes/withdrawals and LP moves shift funds between buckets while keeping Total Net Worth strictly invariant; EURC balances are valued against exact live spot with zero synthetic or random points.
+                    </p>
+                  </div>
+
+                  <div className={`${subCardClass} space-y-2`}>
                     <div className="text-sm font-black">±5.00% (500 bps) Liquidity Skew &amp; Spot Freshness Guard</div>
                     <p className={mutedTextClass}>
-                      Before <InlineCode>addLiquidity</InlineCode> on <InlineCode>{CONTRACT_SPECS[7].address}</InlineCode>, Nexio compares the V2{" "}
+                      Before <InlineCode>addLiquidity</InlineCode> on <InlineCode>{v2RouterAddr}</InlineCode>, Nexio compares the V2{" "}
                       <InlineCode>reserveUsdc / reserveEurc</InlineCode> ratio symmetrically against a fresh (
                       <InlineCode>&lt;= 45s</InlineCode>) two-sided 1-EURC live market spot quote.
                     </p>
@@ -1220,7 +1255,7 @@ if (owns) {
 
                 <div className="rounded-2xl border border-sky-300 bg-sky-50 p-4 text-xs leading-relaxed text-slate-900 dark:border-cyan-400/30 dark:bg-cyan-500/10 dark:text-cyan-50">
                   <strong>48-Hour Consecutive Reset &amp; Batch Execution Rule:</strong>{" "}
-                  <InlineCode>DailyGM.sol</InlineCode> (<InlineCode>{CONTRACT_SPECS[3].address}</InlineCode>) requires{" "}
+                  <InlineCode>DailyGM.sol</InlineCode> (<InlineCode>{dailyGmAddr}</InlineCode>) requires{" "}
                   <InlineCode>block.timestamp &gt;= lastCheckIn + 24 hours</InlineCode> and enforces a{" "}
                   <strong>48-hour consecutive window</strong>: if <InlineCode>block.timestamp &gt; lastCheckIn + 48 hours</InlineCode>,{" "}
                   <InlineCode>streak</InlineCode> resets to <InlineCode>1</InlineCode> on next check-in and{" "}
@@ -1233,7 +1268,7 @@ if (owns) {
             </div>
           )}
 
-          {/* CHAPTER 08: COMPLETE 10-ENTITY SMART CONTRACT & VERIFIED ABI REGISTRY */}
+          {/* CHAPTER 08: COMPLETE SMART CONTRACT & VERIFIED ABI REGISTRY */}
           {chapter === "contracts" && (
             <div id="contracts" className="space-y-6">
               <section className={`${cardClass} space-y-5`}>
@@ -1242,7 +1277,7 @@ if (owns) {
                     Arc Mainnet (5042) Canonical Registry
                   </div>
                   <h3 className="mt-1 text-xl font-black tracking-tight">
-                    10 Deployed Contracts, Tokens &amp; Verified ABIs
+                    {CONTRACT_SPECS.length} Deployed Contracts, Tokens &amp; Verified ABIs
                   </h3>
                   <p className={`mt-1.5 text-xs ${mutedTextClass}`}>
                     Compiled with {NETWORK_SPEC.solidityCompiler}. Protocol fee treasury:{" "}
@@ -1367,7 +1402,7 @@ if (owns) {
                     Defense-in-Depth Invariants
                   </div>
                   <h3 className="mt-1 text-xl font-black tracking-tight">
-                    10 Protocol Security Guardrails
+                    {SECURITY_GUARDRAILS.length} Protocol Security Guardrails
                   </h3>
                   <p className={`mt-1.5 text-sm ${mutedTextClass}`}>
                     Enforced across browser transaction preparation, Next.js server proxy routes, and deployed Arc Mainnet contracts: max swap impact{" "}
@@ -1422,7 +1457,7 @@ if (owns) {
                 <MotionGraphicFrame
                   src={DOCS_MOTION_SVGS.history}
                   alt="Adaptive eth_getLogs History Indexer and SSOT Spec Pipeline"
-                  caption="5,000-block adaptive eth_getLogs scanner (indexing active + legacy contracts and NLPClaimed events) paired with lib/protocol-spec.ts SSOT synchronization."
+                  caption="Adaptive multi-token eth_getLogs scanner (USDC, EURC, cirBTC, WETH, XAUM, NLPClaimed, CheckedIn, ANS, NexioAddressBook) with client-side full-precision CSV export and SSOT spec sync."
                 />
 
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -1503,6 +1538,7 @@ export function DocsPortalStandalone() {
     const next: DocsTheme = current === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     window.localStorage.setItem("nexio_theme", next);
+    window.dispatchEvent(new Event("nexio-theme"));
   };
 
   return (

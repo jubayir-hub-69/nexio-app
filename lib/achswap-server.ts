@@ -492,7 +492,7 @@ export function isPartnerFeeRejection(result: AchswapProxyResult): boolean {
 }
 
 // ============================================================================
-// Per-IP Sliding-Window Rate Limiter (60 req / 60s)
+// Per-IP Sliding-Window Rate Limiter (120 req / 60s)
 // ============================================================================
 
 const ipBuckets = new Map<string, number[]>();

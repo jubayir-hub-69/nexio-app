@@ -92,7 +92,12 @@ import {
   nextGmTierForStreak,
   unlockedGmTierForStreak,
 } from "@/lib/gm-tiers";
-import { fetchOnChainHistory, type OnChainHistoryEntry } from "@/lib/history";
+import {
+  fetchOnChainHistory,
+  invalidateStablecoinFlowCache,
+  type OnChainHistoryEntry,
+} from "@/lib/history";
+import { downloadTreasuryHistoryCsv } from "@/lib/treasury-export";
 import {
   AddressBookAutocomplete,
   AddressBookModal,
@@ -100,10 +105,12 @@ import {
   AnimatedNumber,
   BatchCapacityRail,
   BookUserIcon,
+  CheckIcon,
   CloseIcon,
   CopyButton,
   DailyGmGauge,
   DomainResolutionBadge,
+  DownloadIcon,
   ExplorerReceiptDrawer,
   HistoryEmptyIcon,
   HoloPassCard,
@@ -115,6 +122,7 @@ import {
   PassBadgeIcon,
   PlusIcon,
   PortfolioAllocationBar,
+  PortfolioNetWorthChart,
   QrCodeIcon,
   QrCodeSvg,
   RadarSpinner,
@@ -367,7 +375,7 @@ const tc = {
     "bg-transparent text-slate-800 border-transparent hover:bg-slate-200/80 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-white",
   drawerBg: "bg-white border-slate-300 dark:bg-[#050B16] dark:border-white/10",
   cardBg:
-    "border-slate-300 bg-white shadow-sm text-slate-900 hover:border-sky-700/50 dark:border-white/10 dark:bg-gradient-to-b dark:from-[#0A1A38]/65 dark:to-[#060E1E]/85 dark:shadow-2xl dark:text-white dark:hover:border-cyan-400/25",
+    "border-slate-300 bg-white shadow-sm text-slate-900 hover:border-sky-700/50 dark:border-white/10 dark:bg-[#0A1931]/60 dark:shadow-lg dark:text-white dark:hover:border-cyan-400/30",
   actionCard:
     "border-slate-300 bg-white shadow-sm text-slate-900 hover:bg-slate-50 hover:border-sky-700/50 dark:border-white/10 dark:bg-[#0A1931]/60 dark:shadow-lg dark:text-white dark:hover:bg-[#0E2242]/80 dark:hover:border-cyan-400/30",
   modalBg:
@@ -529,6 +537,8 @@ export default function Home() {
     to: number;
     latest: number;
   } | null>(null);
+  const [analyticsRefreshVersion, setAnalyticsRefreshVersion] = useState(0);
+  const [csvExportedRecently, setCsvExportedRecently] = useState(false);
 
   // Non-render refs
   const txBusyRef = useRef(false);
@@ -545,6 +555,7 @@ export default function Home() {
   const historyGenRef = useRef(0);
   const addressBookGenRef = useRef(0);
   const messageTimerRef = useRef<number | null>(null);
+  const csvExportTimerRef = useRef<number | null>(null);
   const sendLockRef = useRef(false);
   const lastLpQuoteKeyRef = useRef("");
   const autoCheckedPassWalletRef = useRef("");
@@ -620,6 +631,7 @@ export default function Home() {
   useEffect(() => {
     return () => {
       if (messageTimerRef.current !== null) window.clearTimeout(messageTimerRef.current);
+      if (csvExportTimerRef.current !== null) window.clearTimeout(csvExportTimerRef.current);
     };
   }, []);
 
@@ -815,6 +827,8 @@ export default function Home() {
       setHistoryScannedRange(null);
       setHistoryLoading(false);
       setHistoryLoadingMore(false);
+      setCsvExportedRecently(false);
+      invalidateStablecoinFlowCache();
       if (!options?.keepWallet) {
         setChainId(null);
       }
@@ -1047,6 +1061,10 @@ export default function Home() {
         }
 
         setBalancesReady(true);
+        if (options?.force && targetWallet) {
+          invalidateStablecoinFlowCache(targetWallet);
+          setAnalyticsRefreshVersion((v) => v + 1);
+        }
       } catch (error) {
         if (isAbortError(error)) return;
         // Transient RPC failures are handled gracefully via multi-RPC quarantine without console.error noise
@@ -1115,6 +1133,26 @@ export default function Home() {
     },
     []
   );
+
+  const handleExportHistoryCsv = useCallback(() => {
+    if (!wallet || historyEntries.length === 0) {
+      showMessage("No verified on-chain transactions available to export.");
+      return;
+    }
+    try {
+      const { rowCount, filename } = downloadTreasuryHistoryCsv(historyEntries, wallet);
+      setCsvExportedRecently(true);
+      if (csvExportTimerRef.current !== null) {
+        window.clearTimeout(csvExportTimerRef.current);
+      }
+      csvExportTimerRef.current = window.setTimeout(() => {
+        setCsvExportedRecently(false);
+      }, 2200);
+      showMessage(`Exported ${rowCount} verified on-chain records (${filename}).`);
+    } catch {
+      showMessage("Could not generate CSV file in this browser.");
+    }
+  }, [wallet, historyEntries, showMessage]);
 
   // On-Chain Address Book Loader (NexioAddressBook.getContacts)
   const loadAddressBookContacts = useCallback(
@@ -5453,7 +5491,7 @@ export default function Home() {
                 Nexio Protocol
               </h1>
               <p className={`text-sm md:text-base font-medium max-w-2xl mx-auto px-2 ${tc.textDesc}`}>
-                Enterprise Stablecoin Banking, Automated Yield Vaults &amp; Permanent .nex Identity on Arc Mainnet.
+                Enterprise Stablecoin Treasury. Automated Yield Vaults &amp; Seamless On-Chain Identity.
               </p>
             </div>
           ) : (
@@ -5600,24 +5638,6 @@ export default function Home() {
                   </span>
                 </button>
               </div>
-
-              {/* On-Chain Enterprise Address Book Quick Access Strip */}
-              <div className="mt-4 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => void handleOpenAddressBook()}
-                  disabled={chainLocked}
-                  className={`inline-flex items-center gap-2.5 rounded-2xl border px-5 py-3 text-xs sm:text-sm font-black transition-all hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none ${tc.actionCard}`}
-                >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-emerald-100 text-emerald-800 border border-emerald-300/80 dark:bg-emerald-500/12 dark:text-emerald-300 dark:border-emerald-500/25">
-                    <BookUserIcon size={15} />
-                  </span>
-                  <span className="text-slate-900 dark:text-white">On-Chain Address Book</span>
-                  <span className="nx-num rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100 dark:bg-cyan-500/12 px-2.5 py-0.5 text-[10px] font-extrabold text-sky-900 dark:text-cyan-300">
-                    {wallet ? `${addressBookContacts.length} Saved` : "Connect Wallet"}
-                  </span>
-                </button>
-              </div>
             </div>
           )}
 
@@ -5651,6 +5671,25 @@ export default function Home() {
                   </span>
                 </div>
               </div>
+
+              {/* Dynamic On-Chain 7D / 30D Net Worth Trajectory Analytics */}
+              <PortfolioNetWorthChart
+                wallet={wallet}
+                isArcMainnet={isArcMainnet}
+                balancesReady={balancesReady}
+                balancesLoading={balancesLoading}
+                walletUsdc6={usdcWallet6}
+                vaultUsdc6={usdcStakedRaw}
+                lpUsdc6={lpPooledUsdcRaw}
+                walletEurc6={eurcBalanceRaw}
+                vaultEurc6={eurcStakedRaw}
+                lpEurc6={lpPooledEurcRaw}
+                eurcSpotOut6={activeEurcSpotOut}
+                chainNowSec={liveChainNowSec}
+                refreshVersion={analyticsRefreshVersion}
+                isConnecting={isConnecting}
+                onConnectWallet={connectWallet}
+              />
 
               {/* Nexio DeFi Vault Staking & Withdrawal */}
               <div className={`rounded-[2rem] border p-6 sm:p-8 ${tc.solidCardBg}`}>
@@ -7330,15 +7369,37 @@ export default function Home() {
                 </div>
 
                 {wallet && (
-                  <button
-                    type="button"
-                    onClick={() => void loadOnChainHistory(wallet)}
-                    disabled={historyLoading}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/85 dark:bg-cyan-500/10 px-4 py-2 text-xs font-extrabold text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition disabled:opacity-50 self-start sm:self-auto"
-                  >
-                    {historyLoading ? <RadarSpinner size={14} /> : <RefreshCwIcon size={14} />}
-                    <span>Refresh</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={handleExportHistoryCsv}
+                      disabled={historyLoading || historyEntries.length === 0}
+                      className={`nx-num inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-xs font-extrabold transition disabled:opacity-45 disabled:pointer-events-none ${
+                        csvExportedRecently
+                          ? "border-emerald-600/45 bg-emerald-100 text-emerald-900 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-300"
+                          : "border-emerald-600/35 dark:border-emerald-500/35 bg-emerald-50 dark:bg-emerald-500/10 text-emerald-900 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-500/20"
+                      }`}
+                    >
+                      {csvExportedRecently ? <CheckIcon size={14} /> : <DownloadIcon size={14} />}
+                      <span>
+                        {csvExportedRecently
+                          ? "CSV Exported"
+                          : historyEntries.length > 0
+                            ? `Export to CSV (${historyEntries.length})`
+                            : "Export to CSV"}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => void loadOnChainHistory(wallet)}
+                      disabled={historyLoading}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-sky-600/35 dark:border-cyan-500/35 bg-sky-100/85 dark:bg-cyan-500/10 px-4 py-2 text-xs font-extrabold text-sky-900 dark:text-cyan-200 hover:bg-sky-200/70 dark:hover:bg-cyan-500/20 transition disabled:opacity-50"
+                    >
+                      {historyLoading ? <RadarSpinner size={14} /> : <RefreshCwIcon size={14} />}
+                      <span>Refresh</span>
+                    </button>
+                  </div>
                 )}
               </div>
 

@@ -287,6 +287,25 @@ export function EditIcon({ size = 15, ...props }: IconProps) {
   );
 }
 
+export function DownloadIcon({ size = 15, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M12 4.25v10.5" />
+      <path d="m7.75 10.75 4.25 4.25 4.25-4.25" />
+      <path d="M4.5 17.25v1.5a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-1.5" />
+    </svg>
+  );
+}
+
+export function TrendingUpIcon({ size = 16, ...props }: IconProps) {
+  return (
+    <svg {...baseProps(size, props)}>
+      <path d="M3.75 16.75 9.5 11l3.75 3.75 7-7.5" />
+      <path d="M15.25 7.25h5v5" />
+    </svg>
+  );
+}
+
 export function NexioMarkIcon({ size = 24, ...props }: IconProps) {
   return (
     <svg

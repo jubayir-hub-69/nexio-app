@@ -548,8 +548,10 @@ export const ROUTING_API_SPEC = {
     "Server-only ACHSWAP_API_KEY injected as Authorization Bearer and x-api-key headers on the server; never exposed in NEXT_PUBLIC_* variables.",
   upstreamTimeoutMs: 8_000,
   ipRateLimit: "120 requests per 60-second sliding window per client IP (returns 429 RATE_LIMITED).",
+  tokenDiscoveryPolicy:
+    "GET /api/achswap/tokens?chainId=5042&q=... proxies Achswap live token discovery (60,000 ms TTL for top tokens, 15,000 ms for search queries, single-flight dedup + stale-if-error), prioritizes verified Arc Mainnet tokens (USDC, EURC, cirBTC, WETH, XAUM), and falls back to live on-chain ERC-20 symbol()/name()/decimals() RPC reads for arbitrary valid 0x contract addresses.",
   pureSpotPolicy:
-    "Pure Unskewed Two-Sided Market Spot (`spotOnly: true, feeBps: 0`): queries both `1 EURC -> USDC` and `1 USDC -> EURC` in parallel without calling `readGmStreak`, computing exact mid-spot `(bidOut + impliedAskOut + 1n) / 2n` when spread <= 400 bps (canceling pool swap fees to < 0.05 bps). Cached 30,000 ms with 45,000 ms hard staleness eviction.",
+    "Pure Unskewed Two-Sided Market Spot (`spotOnly: true, feeBps: 0`): queries both `1 EURC -> USDC` and `1 USDC -> EURC` in parallel without calling `readGmStreak`, computing exact mid-spot `(bidOut + impliedAskOut + 1n) / 2n` when spread <= 400 bps (canceling pool swap fees to < 0.05 bps). Cached 30,000 ms with 45,000 ms hard staleness eviction. Universal swap pairs query `requestPairReferenceSpot` (`spotOnly: true, feeBps: 0`) with smart unit scaling on a strict 5,000 ms AbortController auto-refresh cycle.",
   quoteCachePolicy:
     "3,000 ms server TTL (LRU max 200 keys) + single-flight quoteInflight deduplication keyed by chainId:tokenIn:tokenOut:amountIn:feeBps:feeRecipient:slippageBps.",
   swapCachePolicy:
@@ -583,7 +585,7 @@ export const ROUTING_API_SPEC = {
       field: "amountIn",
       type: "string (positive integer)",
       required: true,
-      validationAndBehavior: "Base-unit integer string matching /^[1-9]\\d*$/ (6-decimal units for USDC & EURC).",
+      validationAndBehavior: "Base-unit integer string matching /^[1-9]\\d*$/ scaled by tokenIn.decimals (e.g. 6 for USDC/EURC, 8 for cirBTC, 18 for WETH/XAUM).",
     },
     {
       field: "slippageBps",
@@ -629,7 +631,7 @@ export const ROUTING_API_SPEC = {
       field: "amountOut",
       type: "bigint (from string/int/hex)",
       required: true,
-      validationAndBehavior: "Exact quoted output in 6-decimal token units; displayed verbatim via formatUnits(amountOut, 6).",
+      validationAndBehavior: "Exact quoted output in tokenOut base units; formatted verbatim against tokenOut.decimals without synthetic scaling.",
     },
     {
       field: "minAmountOut",
@@ -695,14 +697,14 @@ export const ROUTING_API_SPEC = {
       code: "NOT_FOUND",
       layer: "Proxy Route",
       retryPolicy: "Do not retry.",
-      meaningAndHandling: "Dynamic [action] segment was neither `quote` nor `swap`.",
+      meaningAndHandling: "Dynamic [action] segment was not `GET tokens`, `POST quote`, or `POST swap`.",
     },
     {
       httpStatus: "400 / 404",
       code: "NO_ROUTE",
       layer: "Upstream / Proxy",
       retryPolicy: "Never fee-fallback retried.",
-      meaningAndHandling: "No executable liquidity path exists on Arc Mainnet for the requested pair/size.",
+      meaningAndHandling: "No executable Arc Mainnet liquidity path exists for the requested token pair and size.",
     },
     {
       httpStatus: "400 / 422",
@@ -716,7 +718,7 @@ export const ROUTING_API_SPEC = {
       code: "RATE_LIMITED",
       layer: "Upstream / Proxy",
       retryPolicy: "Auto-retried [0, 400, 900] ms + Retry-After (<=5s).",
-      meaningAndHandling: "Per-IP proxy limit (60 req/60s) or upstream rate limit exhausted after 3 attempts.",
+      meaningAndHandling: "Per-IP proxy limit (120 req/60s) or upstream rate limit exhausted after 3 attempts.",
     },
     {
       httpStatus: "429",
@@ -854,6 +856,14 @@ export const SECURITY_GUARDRAILS: readonly SecurityGuardrailSpec[] = [
     description:
       "Each wallet binds at most one permanent `.nex` domain. Lookups pre-check `hasDomain`/`isAvailable` to avoid revert exceptions, rethrow genuine RPC outages, and require forward+reverse match before granting Verified Pass status.",
   },
+  {
+    id: "G-11",
+    title: "Wallet-Scoped Address Book, Anti-Spoof Tokens & RFC 4180 CSV Safety",
+    thresholdOrRule: "`msg.sender` contact isolation (max 100) + Verified badge + Formula-injection escape",
+    enforcementLayer: "`NexioAddressBook`, `SwapModule.tsx` & `lib/treasury-export.ts`",
+    description:
+      "`NexioAddressBook` isolates whitelisted contacts strictly per `msg.sender`; the Swap Token Selector distinguishes Verified assets from Unverified tickers with truncated contract addresses; client-side CSV exports preserve full `bigint` precision while neutralizing spreadsheet formula injection.",
+  },
 ] as const;
 
 export type TroubleshootingRow = {
@@ -887,8 +897,8 @@ export const TROUBLESHOOTING_MATRIX: readonly TroubleshootingRow[] = [
   {
     symptomOrCode: "NO_ROUTE (HTTP 400 / 404)",
     module: "Nexio Swap",
-    rootCause: "No executable Arc Mainnet USDC/EURC liquidity route exists for the requested trade size.",
-    resolution: "Reduce `amountIn` to match available pool depth and request a fresh quote.",
+    rootCause: "No executable Arc Mainnet liquidity route exists for the selected token pair and trade size.",
+    resolution: "Reduce `amountIn` or verify active pool liquidity for the chosen token pair before re-quoting.",
   },
   {
     symptomOrCode: "SIMULATION_FAILED (HTTP 400 / 422)",
@@ -900,7 +910,7 @@ export const TROUBLESHOOTING_MATRIX: readonly TroubleshootingRow[] = [
   {
     symptomOrCode: "RATE_LIMITED / CONCURRENCY_LIMITED (HTTP 429)",
     module: "Swap Routing Proxy",
-    rootCause: "Exceeded 60 req/60s per-IP proxy window or upstream concurrency after 3 automatic backoff retries.",
+    rootCause: "Exceeded 120 req/60s per-IP proxy window or upstream concurrency after 3 automatic backoff retries.",
     resolution: "Pause 2–5 seconds before re-quoting; identical quotes within 3s automatically share cached responses.",
   },
   {
@@ -969,49 +979,49 @@ export const MODULE_FLOW_SPECS: readonly ModuleFlowSpec[] = [
   {
     num: "01",
     id: "dashboard",
-    title: "Dashboard, QR Request & Multi-Recipient Batch Settlement",
-    subtitle: "Shared 18/6-dec USDC, EURC, local ISO QR, and EIP-5792 / sequential batch fan-out",
+    title: "Dashboard, On-Chain Address Book & Multi-Recipient Batch Settlement",
+    subtitle: "Shared 18/6-dec USDC, EURC, whitelisted contacts autocomplete, local ISO QR & EIP-5792 batch fan-out",
     svgPath: DOCS_MOTION_SVGS.batch,
     svgAlt: "Dashboard Send and Multi-Recipient Batch Settlement animated pipeline",
-    contractsAndRoutes: "Native USDC, EURC (0xbEf5…21c1), NexNameService.resolve, EIP-5792 wallet_sendCalls / prepareAndSendTx",
+    contractsAndRoutes: `Native USDC, EURC (0xbEf5…21c1), NexioAddressBook (${ADDRESS_BOOK_ADDRESS.slice(0, 6)}…${ADDRESS_BOOK_ADDRESS.slice(-4)}), NexNameService, EIP-5792`,
     summary:
-      "Resolves single and comma-separated `.nex` recipients via Multicall3 read batching, reserves `0.005 USDC` (scaled × N in sequential fallback) for L1 gas, generates zero-leak on-device SVG payment QRs, and executes multi-recipient transfers up to `5 / 20 / 50 / Unlimited` recipients.",
+      "Pairs single and comma-separated `.nex` batch transfers with a live wallet-scoped `NexioAddressBook` (`0xD043…63C0`, up to 100 contacts/wallet) featuring instant autocomplete in Single and Batch Send, `0.005 USDC` gas reservation, zero-leak on-device SVG payment QRs, and `5 / 20 / 50 / Unlimited` batch settlement.",
     invariants: [
       "Batch recipient cap is governed by consecutive DailyGM tier (5 default -> 20 at 30D -> 50 at 90D -> Unlimited at 180D VIP).",
-      "Multicall3 (0xcA11…CA11) is strictly read-only (`batchResolveRecipients`) and never called for ERC-20 `transfer` writes.",
-      "Includes 1-click `Retry Remaining` recovery if any leg is rejected in sequential wallet mode.",
+      "`NexioAddressBook` writes (`saveContact`, `removeContact`) are strictly isolated per `msg.sender` with live `.nex` resolution before signing.",
+      "Multicall3 (0xcA11…CA11) is strictly read-only (`batchResolveRecipients`); batch writes use EIP-5792 `wallet_sendCalls` with sequential `prepareAndSendTx` + `Retry Remaining` fallback.",
     ],
   },
   {
     num: "02",
     id: "portfolio",
-    title: "Portfolio, Automated Vaults & Exact 1e18 NLP Engine",
-    subtitle: "$100 USD staked = exact 10.00 NLP / 24h (86,400s) + real on-chain claimNLP() + pure two-sided spot",
+    title: "Portfolio Analytics (7D/30D), Automated Vaults & Exact 1e18 NLP Engine",
+    subtitle: "On-chain daily UTC Net Worth trajectory + $100 USD staked = exact 10.00 NLP / 24h + on-chain claimNLP()",
     svgPath: DOCS_MOTION_SVGS.vaults,
     svgAlt: "Automated Yield Vaults and Exact 1e18 NLP Accrual Engine animated diagram",
-    contractsAndRoutes: `NexioUSDCVault (${USDC_VAULT_ADDRESS.slice(0, 6)}…${USDC_VAULT_ADDRESS.slice(-4)}), NexioVault [EURC] (${EURC_VAULT_ADDRESS.slice(0, 6)}…${EURC_VAULT_ADDRESS.slice(-4)}), Pure Two-Sided Spot`,
+    contractsAndRoutes: `NexioUSDCVault (${USDC_VAULT_ADDRESS.slice(0, 6)}…${USDC_VAULT_ADDRESS.slice(-4)}), NexioVault [EURC] (${EURC_VAULT_ADDRESS.slice(0, 6)}…${EURC_VAULT_ADDRESS.slice(-4)}), Recharts 7D/30D Analytics`,
     summary:
-      "Computes exact BigInt Net Worth across single-counted wallet USDC, 1:1 staked Vault USDC/EURC, and V2 LP underlying marked against unskewed two-sided market spot (`spotOnly: true, feeBps: 0`), while accruing continuous `1e18` NLP settled on-chain via `claimNLP()`.",
+      "Computes exact BigInt Net Worth across single-counted wallet USDC, 1:1 staked Vault USDC/EURC, and V2 LP underlying marked against pure two-sided market spot (`spotOnly: true, feeBps: 0`), renders a live 7D/30D daily UTC Net Worth trajectory reconstructed backward from verified `eth_getLogs` transfers, and accrues continuous `1e18` NLP settled on-chain via `claimNLP()`.",
     invariants: [
       "Native USDC (18-dec) and ERC-20 USDC (6-dec) are counted once (`native / 10^12`); LP underlying is included in Net Worth.",
-      "`deltaPoints18 = (stakedBalance * 1e12 * elapsed) / 864000` yields exact `10.00 NLP / $100 USD / 24h` across both USDC and spot-normalized EURC.",
-      "`claimNLP()` settles `accruedPoints` into `claimedPoints` on-chain and emits `NLPClaimed` (zero self-transfers).",
+      "7D/30D chart reconstructs all 6 buckets (`wallet`/`vault`/`lp` × `USDC`/`EURC`) backward via `Previous = Current - NetTransfers(day)` so internal Vault/LP transfers never distort Total Net Worth (zero mock or random points).",
+      "`deltaPoints18 = (stakedBalance * 1e12 * elapsed) / 864000` yields exact `10.00 NLP / $100 USD / 24h`, settled via `claimNLP()` emitting `NLPClaimed`.",
     ],
   },
   {
     num: "03",
     id: "swap",
-    title: "Nexio Swap (Protected Execution Pipeline)",
-    subtitle: "Server-isolated credentials, consecutive streak fee discounts, single-pass allowance, and dual price guards",
+    title: "Universal Token Swap (Live Discovery & 5s Real-Time Quotes)",
+    subtitle: "Dynamic Arc Mainnet token directory, strict 5s AbortController auto-refresh, streak discounts & dual guards",
     svgPath: DOCS_MOTION_SVGS.swap,
     svgAlt: "Nexio Swap Execution Pipeline animated diagram",
-    contractsAndRoutes: "POST /api/achswap/quote, POST /api/achswap/swap, DailyGM.getEffectiveStreak, Dynamic Settlement Executor",
+    contractsAndRoutes: "GET /api/achswap/tokens, POST /api/achswap/quote, POST /api/achswap/swap, DailyGM.getEffectiveStreak",
     summary:
-      "Streams debounced quotes through the Next.js server routing proxy, applies active consecutive streak discounts (`20 / 10 / 5 / 0 bps`), enforces `<= 5.00%` impact and `<= 20.00%` spot value-loss circuit breakers, mines exact `approval.spender` (`tx.wait(1)` + poll), and pre-simulates `swap.tx`.",
+      "Discovers verified and community Arc Mainnet tokens dynamically via `/api/achswap/tokens` (with on-chain ERC-20 `0x` lookup and 1-roundtrip `Multicall3` balance reads), refreshes pure `0`-fee market spot and user quotes every `5,000 ms` with `AbortController` race cancellation, applies consecutive streak discounts (`20 / 10 / 5 / 0 bps`), and enforces dual price-impact/value-loss circuit breakers.",
     invariants: [
-      "Receive & Min Received display verbatim `amountOut` and `minAmountOut` with zero synthetic formulas.",
-      "Single-pass `/swap` flow verifies `approval.token === tokenIn` and `swap.minAmountOut >= acceptedMinOut` before signing.",
-      "Targeted fee fallback retries `0 bps` only on partner-fee rejections (`400`/`422`), never on `NO_ROUTE` or `SIMULATION_FAILED`.",
+      "Token Selector distinguishes Verified assets from Unverified community tokens (with truncated contract address) to block ticker spoofing.",
+      "Active quotes and `spotOnly: true, feeBps: 0` spot rates refresh strictly every `5,000 ms` with per-cycle `AbortController` cancellation.",
+      "Single-pass `/swap` flow verifies `approval.token === tokenIn`, mines exact allowance (`tx.wait(1)` + poll), enforces `swap.minAmountOut >= acceptedMinOut`, and pre-simulates `swap.tx`.",
     ],
   },
   {
@@ -1081,17 +1091,17 @@ export const MODULE_FLOW_SPECS: readonly ModuleFlowSpec[] = [
   {
     num: "08",
     id: "history",
-    title: "Adaptive eth_getLogs History Indexer & SSOT Specs",
-    subtitle: "5,000-block event scanner (active + legacy contracts) & single-source /docs, /docs.txt, /llms.txt",
+    title: "Adaptive eth_getLogs Indexer, Enterprise CSV Export & SSOT Specs",
+    subtitle: "Multi-token 5,000-block scanner, client-side accounting CSV ledger & single-source /docs, /docs.txt, /llms.txt",
     svgPath: DOCS_MOTION_SVGS.history,
     svgAlt: "Adaptive eth_getLogs History Indexer and SSOT Spec Pipeline animated diagram",
-    contractsAndRoutes: "lib/history.ts (`eth_getLogs`), lib/protocol-spec.ts, /docs, /docs.txt, /llms.txt",
+    contractsAndRoutes: "lib/history.ts (`eth_getLogs`), lib/treasury-export.ts (CSV), lib/protocol-spec.ts, /docs, /docs.txt, /llms.txt",
     summary:
-      "Scans Arc Mainnet `Transfer`, `Deposited`, `Withdrawn`, `NLPClaimed`, `CheckedIn`, and `DomainRegistered` logs across both active and legacy contract generations in 5,000-block adaptive windows, while `lib/protocol-spec.ts` keeps all documentation endpoints synchronized.",
+      "Scans Arc Mainnet `Transfer` logs across verified tokens (`USDC`, `EURC`, `cirBTC`, `WETH`, `XAUM`—classifying sends, receives, multi-token swaps, vault stakes/withdrawals, and LP events) alongside `NLPClaimed`, `CheckedIn`, `DomainRegistered`, `ContactSaved`, and `ContactRemoved` logs, and exports full-precision RFC 4180 CSV accounting ledgers strictly client-side.",
     invariants: [
-      "Automatic binary block-range halving on RPC limits + `${txHash}:${logIndex}` deterministic deduplication.",
-      "Indexes both current (`0x1A85…`, `0x77e4…`, `0xfE12…`) and legacy (`0x609A…`, `0x0457…`, `0xb30c…`) deployments.",
-      "`/docs`, `/docs.txt`, `/llms.txt`, and `README.md` share one canonical specification source.",
+      "Automatic binary block-range halving on RPC limits + `${txHash}:${logIndex}` deterministic deduplication across active and legacy contracts.",
+      "Enterprise CSV Export (`Date (UTC), Transaction Hash, Type, Asset, Amount, Status`) preserves exact full-precision decimals via `formatUnits(amountRaw, decimals)` with UTF-8 BOM and formula-injection defense.",
+      "`/docs`, `/docs.txt`, `/llms.txt`, and `README.md` share one canonical specification source (`lib/protocol-spec.ts`).",
     ],
   },
 ] as const;
@@ -1161,6 +1171,7 @@ export function buildDocsTxt(): string {
     `Local Routes      : GET ${ROUTING_API_SPEC.proxyTokensPath} | POST ${ROUTING_API_SPEC.proxyQuotePath} | POST ${ROUTING_API_SPEC.proxySwapPath}`,
     `Auth Isolation    : ${ROUTING_API_SPEC.authentication}`,
     `Timeout & Limits  : ${ROUTING_API_SPEC.upstreamTimeoutMs} ms upstream timeout | ${ROUTING_API_SPEC.ipRateLimit}`,
+    `Token Discovery   : ${ROUTING_API_SPEC.tokenDiscoveryPolicy}`,
     `Pure Spot Engine  : ${ROUTING_API_SPEC.pureSpotPolicy}`,
     `Quote Caching     : ${ROUTING_API_SPEC.quoteCachePolicy}`,
     `Swap Caching      : ${ROUTING_API_SPEC.swapCachePolicy}`,
@@ -1204,11 +1215,14 @@ export function buildDocsTxt(): string {
     "  - Multi-recipient batch transfers execute via EIP-5792 `wallet_sendCalls` when supported by the connected wallet, with automatic fallback to sequential `prepareAndSendTx` transactions and per-recipient retry tracking.",
     `  - Multicall3 (${MULTICALL3_CANONICAL_ADDRESS}) is used STRICTLY for batched eth_call reads (aggregate3) and NEVER for ERC-20 transfer writes.`,
     "",
-    "5. .NEX IDENTITY, AUTOMATED VAULTS / NLP & LP SKEW GUARD",
-    "--------------------------------------------------------",
+    "5. .NEX IDENTITY, ADDRESS BOOK, ANALYTICS, CSV LEDGER & LP GUARD",
+    "----------------------------------------------------------------",
     "- .nex Domains (`NexNameService`): 1 wallet = 1 permanent `.nex` name; labels are normalized lowercase `[a-z0-9-]{1,63}` without `.nex` (rejecting `.eth`/`.arc`). Always pre-check `isAvailable(label)` before `resolve(label)` and `hasDomain(wallet)` before `resolveByAddress(wallet)` because unregistered lookups revert.",
     "- Sovereign Recovery: Clearing browser storage never affects on-chain ownership. Identity Vault / Nexio Pass calls `hasDomain(wallet)` -> `resolveByAddress(wallet)` -> verifies `resolve(label) === wallet`.",
+    `- On-Chain Address Book (\`NexioAddressBook\`, ${ADDRESS_BOOK_ADDRESS}): Wallet-scoped (\`msg.sender\`) recipient whitelist storing up to 100 labeled 0x/.nex contacts on Arc Mainnet, integrated with live autocomplete in Single and Batch Send.`,
     "- Automated Vaults & Exact NLP Math: `NexioUSDCVault` (`0x77e4...e599`) and `NexioVault` [EURC] (`0xfE12...4CB7`) custody 1:1 6-decimal principal and accrue 18-decimal NLP via `deltaPoints18 = (stakedBalance * 1e12 * elapsed) / 864000` (`$100 USD` staked = exact `10.00 NLP` per `24h`, USD-normalized for EURC via `computeUsdScaledVaultNlp18`). Pending NLP settles on-chain via `claimNLP()` emitting `NLPClaimed`.",
+    "- 7D / 30D Portfolio Net Worth Analytics (`lib/portfolio-analytics.ts`): Reconstructs daily UTC snapshots backward from verified Wallet + Vault + LP balances (`Previous = Current - NetTransfers(day)`) using `eth_getLogs` stablecoin flows so internal Vault/LP moves preserve Total Net Worth, multiplied by live EURC spot (zero synthetic/mock points).",
+    "- Enterprise Transaction CSV Export (`lib/treasury-export.ts`): 100% client-side RFC 4180 ledger export (`Date (UTC), Transaction Hash, Type, Asset, Amount, Status`) with UTF-8 BOM, zero decimal truncation (`formatUnits`), and formula-injection escaping.",
     `- Liquidity Skew Guard: Compares V2 USDC/EURC reserve ratio against pure two-sided 1-EURC live market spot. Symmetric divergence > ${LP_MAX_SKEW_BPS} bps (5.00%) or missing/stale (>45s) spot blocks addLiquidity; removeLiquidity stays open at all times.`,
     "",
     "6. SECURITY GUARDRAILS",
@@ -1275,6 +1289,7 @@ export function buildLlmsTxt(): string {
 - **Shared Native / ERC-20 USDC State**: Native gas \`USDC\` (\`eth_getBalance\`, \`18\` decimals) and ERC-20 \`USDC\` (\`${USDC_ERC20_ADDRESS}\`, \`6\` decimals) share one underlying balance scaled by \`10^12\` (\`1 USDC = 10^18 wei = 10^6 ERC-20 units\`). Never sum both in Net Worth, and never call WETH9 \`deposit()\`/\`withdraw()\` on \`${USDC_ERC20_ADDRESS}\`.
 - **Pure Unskewed Two-Sided EURC Spot**: \`${EURC_ADDRESS}\` (\`6\` decimals) is valued via parallel \`1 EURC -> USDC\` and \`1 USDC -> EURC\` quotes (\`spotOnly: true, feeBps: 0\`), computing exact mid-spot \`(bidOut + impliedAskOut + 1n) / 2n\` when spread \`<= 400 bps\` (\`30s\` TTL, \`45s\` hard staleness ceiling).
 - **Exact Vault NLP Rate & On-Chain Claim**: \`deltaPoints18 = (stakedBalance * 1e12 * elapsed) / 864000\` (\`$100 USD\` staked = exact \`10.00 NLP\` per \`24h\` / \`86,400s\`, USD-normalized for EURC via \`computeUsdScaledVaultNlp18\`), settled on-chain via \`claimNLP()\` emitting \`NLPClaimed\`.
+- **7D / 30D Portfolio Analytics & Enterprise CSV Ledger**: Daily UTC Net Worth trajectory (\`lib/portfolio-analytics.ts\`) reconstructs all 6 stablecoin buckets (\`wallet\`/\`vault\`/\`lp\` × \`USDC\`/\`EURC\`) backward from verified \`eth_getLogs\` flows (\`Previous = Current - NetTransfers(day)\`) without distorting Net Worth on internal Vault/LP transfers; \`lib/treasury-export.ts\` exports full-precision RFC 4180 CSV ledgers (\`Date (UTC), Transaction Hash, Type, Asset, Amount, Status\`) client-side with UTF-8 BOM and formula-injection escaping.
 - **Max Spend Gas Buffer**: \`${NETWORK_SPEC.gasBufferUsdc} USDC\` (\`${NETWORK_SPEC.gasBufferNativeWei}\` native wei / \`${NETWORK_SPEC.gasBufferErc20Units}\` ERC-20 units) reserved across Send, Batch Send, Swap, Vault Stake, and Liquidity Add.
 
 ## Deployed Contracts, Tokens & Infrastructure

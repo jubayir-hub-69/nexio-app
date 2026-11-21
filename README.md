@@ -35,6 +35,7 @@
 | Max Spend Gas Reserve | `0.005 USDC` (`5 * 10^15` native wei / `5,000` ERC-20 units; scaled `× N` in sequential batch mode) |
 | Automated Vault NLP Rate | `$100 USD` staked = exact `10.00 NLP` per `24 hours` (`86,400s`), settled on-chain via `claimNLP()` |
 | Daily GM Window | `24h` (`86,400s`) check-in cooldown · strict `48h` (`172,800s`) consecutive streak window |
+| Swap Quote Refresh Cadence | Strict `5,000 ms` `setInterval` + `AbortController` real-time quote & `0`-fee spot loop |
 | Protocol Fee Treasury | [`0x9AFe5CeF11fC10756faef213f7A30D9873B5d372`](https://explorer.arc.io/address/0x9AFe5CeF11fC10756faef213f7A30D9873B5d372) (`ACHSWAP_FEE_RECIPIENT`) |
 | Solidity Compiler | `0.8.24` (optimizer enabled, `200` runs; contract pragma `^0.8.19`) |
 
@@ -55,9 +56,10 @@
 | **NexioUSDCVault** | `NexioUSDCVault` (`contracts/NexioUSDCVault.sol`) | [`0x77e46702C82f16D6227686e0ED8882c3cf44e599`](https://explorer.arc.io/address/0x77e46702C82f16D6227686e0ED8882c3cf44e599) | `6` / `18` (`NLP`) | [Tx `0x14a46165…446c`](https://explorer.arc.io/tx/0x14a46165848c706191f0ab72640c4c421272894b1fa1786af15e84b8fc3f446c) — 1:1 `USDC` vault & `claimNLP()` engine |
 | **NexioEURCVault** | `NexioVault` (`contracts/NexioVault.sol`) | [`0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7`](https://explorer.arc.io/address/0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7) | `6` / `18` (`NLP`) | [Tx `0x8328d478…4aed`](https://explorer.arc.io/tx/0x8328d47886ad4844ca1e62864f4ebbe7eb472b8955fb7687a749394b36214aed) — 1:1 `EURC` vault & `claimNLP()` engine |
 | **NexioSwap** | `NexioSwap` (`contracts/NexioSwap.sol`) | [`0xD3504e2118b1c7a52cf44947510633562635ee03`](https://explorer.arc.io/address/0xD3504e2118b1c7a52cf44947510633562635ee03) | `6` (`USDC`/`EURC`) | [Tx `0xd0257d93…858c`](https://explorer.arc.io/tx/0xd0257d930ac6c195b60f282a00ccded4bf9100497e8ebcb77bb44addf1bb358c) — *Standalone V2 wrapper (see note)* |
+| **NexioAddressBook** | `NexioAddressBook` (`contracts/NexioAddressBook.sol`) | [`0xD043C8e124bBa0Eb33F5f62348f1914e425663C0`](https://explorer.arc.io/address/0xD043C8e124bBa0Eb33F5f62348f1914e425663C0) | N/A (max `100`/wallet) | [Tx `0xdc48cc4b…1828`](https://explorer.arc.io/tx/0xdc48cc4b1b433e90e6a87a682fd85ae2a8efb01583577245a6a9c71b0bab1828) — Wallet-scoped recipient whitelist & `.nex` contacts |
 | **V2 Liquidity Router** | `IV2LiquidityRouter` | [`0x52FE40c00530db2e43d01652f903870571A14AFD`](https://explorer.arc.io/address/0x52FE40c00530db2e43d01652f903870571A14AFD) | `6` / `18` LP | Direct router called by the UI Liquidity module |
 | **V2 Pair Factory** | `IV2PairFactory` | [`0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530`](https://explorer.arc.io/address/0xb0C2B0acb9c13079dDd871eDaF43Aabf6e88C530) | N/A | Resolves the `USDC`/`EURC` V2 liquidity pair |
-| **Multicall3** | `IMulticall3` | [`0xcA11bde05977b3631167028862bE2a173976CA11`](https://explorer.arc.io/address/0xcA11bde05977b3631167028862bE2a173976CA11) | N/A | **Strictly read-only** `aggregate3` snapshot batcher |
+| **Multicall3** | `IMulticall3` | [`0xcA11bde05977b3631167028862bE2a173976CA11`](https://explorer.arc.io/address/0xcA11bde05977b3631167028862bE2a173976CA11) | N/A | **Strictly read-only** `aggregate3` snapshot & balance batcher |
 
 > **Routing Note (`NexioSwap` vs. UI Routing):** UI Swaps execute against the dynamic `swap.tx.to` settlement executor returned by `/api/achswap/swap`, and UI Liquidity calls the V2 Liquidity Router (`0x52FE40c00530db2e43d01652f903870571A14AFD`) directly. `NexioSwap` (`0xD3504e2118b1c7a52cf44947510633562635ee03`) is deployed as a standalone V2 wrapper contract for direct smart-contract integrations.
 
@@ -65,36 +67,39 @@
 
 ## Protocol Modules & Animated Execution Flows
 
-### 1. Dashboard Send, Local QR & Multi-Recipient Batch Settlement
+### 1. Dashboard Send, On-Chain Address Book & Multi-Recipient Batch Settlement
 
 <p align="center">
   <img src="public/docs/batch-settlement.svg" width="100%" alt="Dashboard Send and Multi-Recipient Batch Settlement" />
 </p>
 
+- **On-Chain Address Book & Recipient Whitelist (`NexioAddressBook` — `0xD043…63C0`):** Wallet-scoped (`msg.sender`) on-chain contact registry supporting up to `100` labeled `0x` / `.nex` contacts per wallet (`saveContact`, `O(1)` swap-and-pop `removeContact`, `getContacts`, `isWhitelisted`). Deeply integrated into the Send and Multi-Recipient Batch Transfer modal with live autocomplete suggestions, instant `.nex` resolution, and 1-click `+ Save to On-Chain Address Book`.
 - **Zero-Leak On-Device QR:** Generates ISO/IEC 18004 Reed-Solomon SVG QR codes locally on-device with zero external image requests.
 - **Batch Reads vs. Batch Writes:** `Multicall3` (`0xcA11bde05977b3631167028862bE2a173976CA11`) is used **strictly for batched `eth_call` reads** (`batchResolveRecipients` for single and comma-separated `.nex` entries). Multi-recipient Batch Transfer **writes** execute via EIP-5792 `wallet_sendCalls` when supported by the wallet, with automatic fallback to sequential `prepareAndSendTx` settlements and 1-click `Retry Remaining` recovery.
 
-### 2. Automated Yield Vaults & Exact `10.00 NLP / $100 / 24h` Engine
+### 2. Portfolio Analytics (`7D`/`30D`), Automated Yield Vaults & Exact `10.00 NLP / $100 / 24h` Engine
 
 <p align="center">
   <img src="public/docs/vault-nlp-engine.svg" width="100%" alt="Automated Yield Vaults and Exact 1e18 NLP Accrual Engine" />
 </p>
 
+- **Dynamic `7D` / `30D` On-Chain Portfolio Analytics (`lib/portfolio-analytics.ts`, `PortfolioNetWorthChart.tsx`):** Reconstructs exact daily UTC end-of-day Net Worth snapshots backward from live verified balances (`PreviousBalance = CurrentBalance - NetTransfersOfDay`) using `eth_getLogs` stablecoin flows (`fetchStablecoinFlowsForDays`) and Recharts (`3.11.0`). Tracks all 6 buckets (`wallet`/`vault`/`lp` × `USDC`/`EURC`) separately in 6-decimal `bigint` arithmetic so internal Vault stakes/withdrawals and LP moves never falsely inflate or deflate Total Net Worth, valued against pure live EURC spot with **zero mock, random, or interpolated data points**.
 - **1:1 Non-Custodial Principal:** `NexioUSDCVault` (`0x77e46702C82f16D6227686e0ED8882c3cf44e599`) and `NexioEURCVault` (`0xfE128bCc8F4D45AB9E24bF446EEa8302d1FD4CB7`) custody 6-decimal `USDC`/`EURC` with `nonReentrant` protection and return exact `1:1` principal on `withdraw(amount)`.
 - **Exact `1e18` NLP Formula:** Points accrue continuously per second on-chain:
   `deltaPoints18 = (stakedBalance * 1e12 * elapsed) / 864000`
   Staking `$100 USD` (`100 * 10^6` units) for `24 hours` (`86,400s`) accrues **exact `10.00 NLP`** (`10 * 10^18`), normalized in USD for `EURC` via `computeUsdScaledVaultNlp18` against live market spot.
 - **On-Chain `claimNLP()` Settlement:** Pending points settle on-chain via `claimNLP()`, moving `accruedPoints[msg.sender]` into `claimedPoints[msg.sender]` and emitting `NLPClaimed(user, amount, totalClaimed, timestamp)` (zero self-transfers).
 
-### 3. Protected Swap Execution Pipeline (`/api/achswap/quote` & `/api/achswap/swap`)
+### 3. Universal Token Swap (`/api/achswap/tokens`, `/quote` & `/swap` · 5s Real-Time Quotes)
 
 <p align="center">
   <img src="public/docs/swap-routing-motion.svg" width="100%" alt="Nexio Swap Execution Pipeline" />
 </p>
 
-- **Server Credential Isolation & Resilience:** `app/api/achswap/[action]/route.ts` validates JSON inputs, locks `chainId === 5042`, enforces a `60 req/60s` per-IP sliding window and `8,000 ms` timeout, deduplicates identical quotes for `3,000 ms` (`max 200` keys), and retries HTTP `429` at `[0, 400, 900] ms` (`Retry-After <= 5,000 ms`) on both `/quote` and `/swap`.
+- **Universal Token Discovery & Anti-Spoof Selector (`GET /api/achswap/tokens`):** Dynamically fetches and caches the live Arc Mainnet token catalog (`60s` top-token TTL, `15s` search TTL, plus live on-chain ERC-20 `symbol()/name()/decimals()` lookup for pasted `0x` contract addresses), hydrates multi-token wallet balances in a single `Multicall3` call (`fetchMultiTokenBalances`), and clearly separates **Verified** assets (`USDC`, `EURC`, `cirBTC`, `WETH`, `XAUM`) from **Unverified** community tickers to prevent symbol spoofing.
+- **Strict 5-Second Auto-Refresh & Server Resilience:** Active quotes and pure `0`-fee reference spot rates (`spotOnly: true, feeBps: 0`, smartly scaled for high-unit-price assets) refresh on a strict `5,000 ms` `setInterval` loop with per-cycle `AbortController` race cancellation. `app/api/achswap/[action]/route.ts` locks `chainId === 5042`, enforces a `120 req/60s` per-IP sliding window and `8,000 ms` upstream timeout, deduplicates identical quotes for `3,000 ms` (`max 200` keys), and retries HTTP `429` at `[0, 400, 900] ms` (`Retry-After <= 5,000 ms`).
 - **Authoritative Streak Fee & Targeted `0 bps` Fallback:** Client `feeBps` is ignored. For user swap quotes, the server reads `DailyGM.getEffectiveStreak(trader)` (`60,000 ms` TTL + `stale-if-error`) and injects `20 / 10 / 5 / 0 bps` routed to `0x9AFe5CeF11fC10756faef213f7A30D9873B5d372` (omitted at `0 bps`). If upstream returns `400`/`422` citing `fee`, `feebps`, `feerecipient`, or `partner`, the proxy retries once at `feeBps: 0` (`NO_ROUTE` and `SIMULATION_FAILED` are never retried).
-- **Client Circuit Breakers:** Hard-blocks swaps when `priceImpactBps > 500` (`5.00%`) or spot value loss exceeds `2000 bps` (`20.00%`), enforces single-pass `approval.spender` verification (`approval.token === tokenIn`, `tx.wait(1)`, on-chain `allowance` poll, and `swap.minAmountOut >= acceptedMinOut`), and pre-simulates `swap.tx` via `eth_call` before signing.
+- **Multi-Decimal Circuit Breakers:** Hard-blocks swaps when `priceImpactBps > 500` (`5.00%`) or spot value loss exceeds `2000 bps` (`20.00%`), enforces `0.005 USDC` gas reservation (and native USDC gas verification for non-USDC inputs), verifies single-pass `approval.token === tokenIn`, mines exact allowance (`tx.wait(1)` + propagation poll), checks `swap.minAmountOut >= acceptedMinOut`, and pre-simulates `swap.tx` via `eth_call`.
 
 ### 4. USDC/EURC V2 Liquidity Pool & ±5% Reserve-Skew Guard
 
@@ -130,13 +135,14 @@
 - **Revert-on-Unregistered Contract Rule:** `resolve(_name)`, `resolveByAddress(_owner)`, and `getFullDomain(_owner)` execute `require(...)` on-chain and **revert** when unbound rather than returning `0x0000000000000000000000000000000000000000` or `""`. Always pre-check `isAvailable(label)` before `resolve(label)` and `hasDomain(wallet)` before `resolveByAddress(wallet)`.
 - **Browser-Independent Recovery & 3× Canvas Fintech Pass Export:** Clearing `localStorage` never clears the chain. Nexio Pass executes `hasDomain(wallet)` -> `resolveByAddress(wallet)` -> verifies `resolve(label) === wallet` and exports a high-DPI `1.586:1` (`24px` radius) tier-themed fintech Pass PNG card locally via HTML5 2D `<canvas>`.
 
-### 7. Adaptive `eth_getLogs` History Indexer & Single-Source Specs
+### 7. Adaptive `eth_getLogs` History Indexer, Enterprise CSV Export & Single-Source Specs
 
 <p align="center">
   <img src="public/docs/history-indexer.svg" width="100%" alt="Adaptive eth_getLogs History Indexer and SSOT Spec Pipeline" />
 </p>
 
-- **Multi-Generation Event Scanner (`lib/history.ts`):** Indexes `Transfer`, `Deposited`, `Withdrawn`, `NLPClaimed`, `CheckedIn`, and `DomainRegistered` logs across both active and legacy contract deployments in 5,000-block adaptive windows with binary range-halving and `${txHash}:${logIndex}` deduplication.
+- **Multi-Token & Multi-Generation Event Scanner (`lib/history.ts`):** Queries `Transfer` logs across canonical Arc Mainnet tokens (`USDC`, `EURC`, `cirBTC`, `WETH`, `XAUM`—classifying sends, receives, cross-asset swaps, active/legacy Vault stakes & withdrawals, and LP add/remove flows) alongside `NLPClaimed`, `CheckedIn`, `DomainRegistered`, `ContactSaved`, and `ContactRemoved` logs with binary range-halving and `${txHash}:${logIndex}` deterministic deduplication.
+- **Enterprise Accounting CSV Export (`lib/treasury-export.ts`):** Generates and downloads RFC 4180 CSV ledgers **100% client-side** (`Blob` + UTF-8 BOM + formula-injection defense) with exact columns `Date (UTC), Transaction Hash, Type, Asset, Amount, Status` and **zero decimal truncation** (`ethers.formatUnits(amountRaw, decimals)`).
 - **Canonical Spec Registry (`lib/protocol-spec.ts`):** Powers `/docs` (`app/docs/page.tsx`), the in-app **Documentation** tab (`components/docs/Documentation.tsx`), `/docs.txt` (`app/docs.txt/route.ts`), and `/llms.txt` (`app/llms.txt/route.ts`) from one TypeScript source of truth.
 
 ---
@@ -164,6 +170,7 @@ Configure server credentials in `.env.local` (gitignored):
 ```dotenv
 ACHSWAP_API_KEY=your_server_routing_api_key
 ACHSWAP_FEE_RECIPIENT=0x9AFe5CeF11fC10756faef213f7A30D9873B5d372
+NEXT_PUBLIC_ADDRESS_BOOK_ADDRESS=0xD043C8e124bBa0Eb33F5f62348f1914e425663C0
 ```
 
 - **Never** prefix `ACHSWAP_API_KEY` with `NEXT_PUBLIC_`.
@@ -179,7 +186,8 @@ ACHSWAP_FEE_RECIPIENT=0x9AFe5CeF11fC10756faef213f7A30D9873B5d372
 | `npm run build` | Build production Next.js bundle and static spec routes |
 | `npm start` | Start production server |
 | `npm run compile` | Compile Solidity contracts via Hardhat (`0.8.24`, optimizer `200` runs) |
-| `npm run deploy:mainnet` | Deploy contracts on `arc_mainnet` (`scripts/deploy_mainnet.ts`, Chain `5042`) |
+| `npm run deploy:mainnet` | Deploy core contracts on `arc_mainnet` (`scripts/deploy_mainnet.ts`, Chain `5042`) |
+| `npm run deploy:upgrades` | Deploy upgraded `DailyGM` and Vault contracts (`scripts/deploy_upgrades.ts`, Chain `5042`) |
 
 ---
 
@@ -189,10 +197,11 @@ ACHSWAP_FEE_RECIPIENT=0x9AFe5CeF11fC10756faef213f7A30D9873B5d372
 | --- | --- | --- |
 | `Wrong network` banner | Wallet chain ID is not `5042` (`0x13b2`) | Click **Switch to Arc Mainnet** or add RPC `https://rpc.mainnet.arc.io`, Chain `5042`, Symbol `USDC` (`18` decimals) |
 | `MISSING_API_KEY` (`401`) | `ACHSWAP_API_KEY` unset in `.env.local` | Set `ACHSWAP_API_KEY` in `.env.local` and restart Next.js |
+| `RATE_LIMITED` (`429`) | Exceeded `120 req/60s` per-IP proxy window or upstream concurrency | Pause 2–5s before re-quoting; identical quotes within `3s` share cached responses |
 | `SIMULATION_FAILED` (`400`/`422`) | Unmined approval, moved quote, or `< 0.005 USDC` gas headroom | Wait for `approve` `tx.wait(1)` confirmation, leave `0.005 USDC` for gas, and re-quote |
-| `Swap disabled` | `priceImpactBps > 500` (`5%`) or spot value loss `> 2000 bps` (`20%`) | Reduce trade size or wait for fresh (`<= 45s`) two-sided 1-unit spot quote |
+| `Swap disabled` | `priceImpactBps > 500` (`5%`) or spot value loss `> 2000 bps` (`20%`) | Reduce trade size or wait for fresh (`<= 45s`) `0`-fee reference spot quote |
 | `Add blocked: pool skew` | V2 reserves diverge `> 5%` from live `1 EURC` market spot (or spot stale) | Wait for pool parity (`<= 5%`); `Remove Liquidity` remains unlocked |
 | `No NLP available to claim` | `getPendingNLP(wallet) == 0` on vault | Stake `USDC` or `EURC` (`$100 USD` = `10.00 NLP / 24h`) and claim once pending NLP `> 0` |
 | `Daily GM streak` reset to `1` | More than `48 hours` elapsed since `lastCheckIn` | Check in within every `24h–48h` window to advance consecutively toward `30D` / `90D` / `180D VIP` |
 | `CALL_EXCEPTION` on `resolve` / `resolveByAddress` | Unregistered lookups revert on `NexNameService` | Call `isAvailable(label)` / `hasDomain(wallet)` prior to resolution |
-| Cleared browser storage | Local cache wiped while on-chain `.nex` & events persist | Use **Recover My Domain** (`resolveByAddress`) and open **History** (`eth_getLogs`) |
+| Cleared browser storage | Local cache wiped while on-chain `.nex`, Address Book & events persist | Use **Recover My Domain** (`resolveByAddress`), **Address Book** (`getContacts`), and **History** (`eth_getLogs`) |
