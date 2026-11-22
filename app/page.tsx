@@ -57,7 +57,6 @@ import {
   isAmountDraft,
   isDomainAvailable,
   isRpcTransportError,
-  maxNativeSpend,
   maxPoolUsdcSpend,
   parseAmount,
   parseStrictAmount,
@@ -859,7 +858,7 @@ export default function Home() {
 
       const cleanTo = (rawTo || "").trim();
       const asset: "USDC" | "EURC" = rawToken?.toUpperCase() === "EURC" ? "EURC" : "USDC";
-      const decimals = asset === "EURC" ? EURC_DECIMALS : NATIVE_USDC_DECIMALS;
+      const decimals = asset === "EURC" ? EURC_DECIMALS : WUSDC_DECIMALS;
 
       const isValidAddress =
         ethers.isAddress(cleanTo) && cleanTo.toLowerCase() !== ethers.ZeroAddress;
@@ -1857,8 +1856,7 @@ export default function Home() {
   // ============================================================================
   // Module 1: Dashboard — Send, Request, Receive & Batch Execution
   // ============================================================================
-  const sendDecimals =
-    sendAsset === "USDC" ? (isBatchMode ? WUSDC_DECIMALS : NATIVE_USDC_DECIMALS) : EURC_DECIMALS;
+  const sendDecimals = sendAsset === "USDC" ? WUSDC_DECIMALS : EURC_DECIMALS;
 
   const recipientCountForGas = Math.max(1, isBatchMode ? rawRecipientList.length : 1);
   const scaledSendGasBuffer = NATIVE_GAS_BUFFER * BigInt(recipientCountForGas);
@@ -1902,7 +1900,7 @@ export default function Home() {
   };
 
   const generatePaymentLink = () => {
-    const decimals = requestAsset === "EURC" ? EURC_DECIMALS : NATIVE_USDC_DECIMALS;
+    const decimals = requestAsset === "EURC" ? EURC_DECIMALS : WUSDC_DECIMALS;
     const check = parseStrictAmount(requestAmount, decimals);
     if (!check.ok || check.value <= ZERO) {
       showMessage(check.ok ? "Enter an amount greater than zero." : check.error);
@@ -1955,22 +1953,17 @@ export default function Home() {
   const fillSendMax = () => {
     const count = BigInt(recipientCountForGas);
     if (sendAsset === "USDC") {
-      if (isBatchMode) {
-        const spendable6 = maxPoolUsdcSpend(usdcBalanceRaw, scaledSendGasBuffer);
-        const each6 = spendable6 / count;
-        if (each6 <= ZERO) {
-          showMessage("Insufficient USDC remaining after reserving Arc gas.");
-          return;
-        }
-        setSendAmount(formatExact(each6, WUSDC_DECIMALS));
-      } else {
-        const spendable18 = maxNativeSpend(usdcBalanceRaw, NATIVE_GAS_BUFFER);
-        if (spendable18 <= ZERO) {
-          showMessage("Insufficient USDC remaining after the 0.005 gas buffer.");
-          return;
-        }
-        setSendAmount(formatExact(spendable18, NATIVE_USDC_DECIMALS));
+      const spendable6 = maxPoolUsdcSpend(usdcBalanceRaw, scaledSendGasBuffer);
+      const each6 = spendable6 / count;
+      if (each6 <= ZERO) {
+        showMessage(
+          isBatchMode
+            ? "Insufficient USDC remaining after reserving Arc gas."
+            : "Insufficient USDC remaining after the 0.005 gas buffer."
+        );
+        return;
       }
+      setSendAmount(formatExact(each6, WUSDC_DECIMALS));
       return;
     }
 
@@ -2011,9 +2004,7 @@ export default function Home() {
 
     const countBig = BigInt(rawRecipientList.length);
     if (sendAsset === "USDC") {
-      const maxAllowed = isBatchMode
-        ? maxPoolUsdcSpend(usdcBalanceRaw, scaledSendGasBuffer)
-        : maxNativeSpend(usdcBalanceRaw, NATIVE_GAS_BUFFER);
+      const maxAllowed = maxPoolUsdcSpend(usdcBalanceRaw, scaledSendGasBuffer);
       if (strictAmt.value * countBig > maxAllowed) {
         showMessage(
           isBatchMode
@@ -2177,24 +2168,17 @@ export default function Home() {
 
         updateSingleLifecycle("simulating");
 
-        let txReq: { to: string; data: string; value: bigint };
-        if (sendAsset === "USDC") {
-          let safeData = "0x";
-          if (cleanMemo) {
-            const targetCode = await provider.getCode(recipientAddr).catch(() => "0x");
-            if (!targetCode || targetCode === "0x") {
-              safeData = ethers.hexlify(ethers.toUtf8Bytes(cleanMemo));
-            }
-          }
-          txReq = { to: recipientAddr, value: strictAmt.value, data: safeData };
-        } else {
-          const erc20Iface = new ethers.Interface(ERC20_ABI);
-          const transferData = erc20Iface.encodeFunctionData("transfer", [
-            recipientAddr,
-            strictAmt.value,
-          ]);
-          txReq = { to: EURC_ADDRESS, value: ZERO, data: transferData };
-        }
+        const tokenTarget = sendAsset === "USDC" ? USDC_ERC20_ADDRESS : EURC_ADDRESS;
+        const erc20Iface = new ethers.Interface(ERC20_ABI);
+        const transferData = erc20Iface.encodeFunctionData("transfer", [
+          recipientAddr,
+          strictAmt.value,
+        ]);
+        const txReq: { to: string; data: string; value: bigint } = {
+          to: tokenTarget,
+          value: ZERO,
+          data: transferData,
+        };
 
         const { hash, receipt } = await prepareAndSendTx(signer, txReq, {
           label: `${sendAsset} recipient`,
@@ -3382,10 +3366,11 @@ export default function Home() {
             pairState.reserveWusdc,
             pairState.reserveEurc
           )) as bigint;
+          const minAllowedEurc = applySlippage(lpEurcStrict.value, lpSlippageBps);
           const maxAllowedEurc =
             lpEurcStrict.value +
             (lpEurcStrict.value * BigInt(lpSlippageBps)) / 10_000n;
-          if (quotedEurc > maxAllowedEurc) {
+          if (quotedEurc < minAllowedEurc || quotedEurc > maxAllowedEurc) {
             setLpEurcInput(formatExact(quotedEurc, EURC_DECIMALS));
             showMessage("Pool reserves shifted; updated EURC amount. Review and confirm again.");
             return;
@@ -3397,10 +3382,11 @@ export default function Home() {
             pairState.reserveEurc,
             pairState.reserveWusdc
           )) as bigint;
+          const minAllowedUsdc = applySlippage(lpUsdcStrict.value, lpSlippageBps);
           const maxAllowedUsdc =
             lpUsdcStrict.value +
             (lpUsdcStrict.value * BigInt(lpSlippageBps)) / 10_000n;
-          if (quotedUsdc > maxAllowedUsdc) {
+          if (quotedUsdc < minAllowedUsdc || quotedUsdc > maxAllowedUsdc) {
             setLpUsdcInput(formatExact(quotedUsdc, WUSDC_DECIMALS));
             showMessage("Pool reserves shifted; updated USDC amount. Review and confirm again.");
             return;
@@ -6079,7 +6065,7 @@ export default function Home() {
                           Staked USDC
                         </div>
                         <div className={`text-[11px] font-semibold ${tc.textMuted}`}>
-                          USDC Yield Vault
+                          1:1 Vault · 10 NLP / $100 / 24h
                         </div>
                       </div>
                     </div>
@@ -6123,7 +6109,7 @@ export default function Home() {
                           Staked EURC
                         </div>
                         <div className={`text-[11px] font-semibold ${tc.textMuted}`}>
-                          EURC Yield Vault
+                          1:1 Vault · 10 NLP / $100 / 24h
                         </div>
                       </div>
                     </div>
@@ -7678,7 +7664,7 @@ export default function Home() {
                 </svg>
               </a>
               <a
-                href="https://github.com/jubayir-hub-69"
+                href="https://github.com/jubayir-hub-69/nexio-app"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="GitHub"

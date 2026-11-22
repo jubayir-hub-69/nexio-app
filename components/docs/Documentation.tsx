@@ -317,9 +317,9 @@ function ArchMulticallReadsSvg() {
       <rect x="20" y="38" width="174" height="140" rx="14" fill="var(--nx-doc-node)" stroke="var(--nx-doc-cyan)" strokeWidth="1.5" />
       <text x="107" y="66" textAnchor="middle" fill="var(--nx-doc-fg)" fontSize="12" fontWeight="700">Multi-RPC Transport</text>
       <text x="107" y="86" textAnchor="middle" fill="var(--nx-doc-cyan-fg)" fontSize="10" fontFamily="monospace">rpc.mainnet.arc.io</text>
-      <text x="107" y="105" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="10">5,000ms call timeout</text>
+      <text x="107" y="105" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="10">12,000ms call timeout</text>
       <text x="107" y="123" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="10">30s 429/5xx quarantine</text>
-      <text x="107" y="141" textAnchor="middle" fill="var(--nx-doc-emerald-fg)" fontSize="10">batchMaxCount: 20</text>
+      <text x="107" y="141" textAnchor="middle" fill="var(--nx-doc-emerald-fg)" fontSize="10">batchMaxCount: 1</text>
       <text x="107" y="159" textAnchor="middle" fill="var(--nx-doc-muted)" fontSize="9.5">Live latency telemetry</text>
 
       <rect x="248" y="26" width="234" height="164" rx="14" fill="var(--nx-doc-node-alt)" stroke="var(--nx-doc-emerald)" strokeWidth="1.5" />

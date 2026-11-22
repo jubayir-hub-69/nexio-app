@@ -508,7 +508,7 @@ export const CONTRACT_SPECS: readonly ContractSpec[] = [
     envOverrideVar: null,
     role: "Single-roundtrip batched RPC read aggregator for balances, vaults, NLP, DailyGM, ANS, and LP state.",
     integrationNote:
-      "STRICT READ-ONLY INVARIANT: Probed via getCode and used ONLY for eth_call read snapshots (aggregate3 with allowFailure: true, falling back to ethers JsonRpcProvider batchMaxCount: 20). NEVER used for ERC-20 transfer writes. Multi-recipient batch writes execute via EIP-5792 wallet_sendCalls with sequential prepareAndSendTx per-recipient fallback.",
+      "STRICT READ-ONLY INVARIANT: Probed via getCode and used ONLY for eth_call read snapshots (aggregate3 with allowFailure: true, falling back to ethers JsonRpcProvider batchMaxCount: 1 with 12,000ms call timeout). NEVER used for ERC-20 transfer writes. Multi-recipient batch writes execute via EIP-5792 wallet_sendCalls with sequential prepareAndSendTx per-recipient fallback.",
     readFunctions: [
       "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) external payable returns (tuple(bool success, bytes returnData)[] returnData)",
       "function getEthBalance(address addr) external view returns (uint256 balance)",
@@ -553,7 +553,7 @@ export const ROUTING_API_SPEC = {
   pureSpotPolicy:
     "Pure Unskewed Two-Sided Market Spot (`spotOnly: true, feeBps: 0`): queries both `1 EURC -> USDC` and `1 USDC -> EURC` in parallel without calling `readGmStreak`, computing exact mid-spot `(bidOut + impliedAskOut + 1n) / 2n` when spread <= 400 bps (canceling pool swap fees to < 0.05 bps). Cached 30,000 ms with 45,000 ms hard staleness eviction. Universal swap pairs query `requestPairReferenceSpot` (`spotOnly: true, feeBps: 0`) with smart unit scaling on a strict 5,000 ms AbortController auto-refresh cycle.",
   quoteCachePolicy:
-    "3,000 ms server TTL (LRU max 200 keys) + single-flight quoteInflight deduplication keyed by chainId:tokenIn:tokenOut:amountIn:feeBps:feeRecipient:slippageBps.",
+    "6,000 ms global server TTL (globalThis LRU max 300 keys) + single-flight quoteInflight deduplication keyed by tokenIn:tokenOut:amountIn.",
   swapCachePolicy:
     "Never cached (every /api/achswap/swap request fetches fresh executable calldata after verified allowance settlement).",
   streakLookupPolicy:

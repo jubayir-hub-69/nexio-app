@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   checkAchswapRateLimit,
   fetchAchswapTokenList,
+  getCachedAchswapQuote,
   isPartnerFeeRejection,
   isRequestAbort,
   parseQuoteBody,
@@ -62,7 +63,7 @@ export async function GET(
       {
         status: 200,
         headers: {
-          "Cache-Control": query ? "no-store" : "public, max-age=30, stale-while-revalidate=60",
+          "Cache-Control": "public, max-age=60, stale-while-revalidate=60",
         },
       }
     );
@@ -127,6 +128,16 @@ export async function POST(
     }
 
     try {
+      // Serve immediately from the 6-second global quote cache (keyed by tokenIn:tokenOut:amountIn)
+      // before making any DailyGM RPC or upstream Achswap API calls.
+      const cachedQuote = getCachedAchswapQuote(parsed.value);
+      if (cachedQuote) {
+        return NextResponse.json(cachedQuote.body, {
+          status: cachedQuote.status,
+          headers: { "Cache-Control": "no-store", "X-Nexio-Quote-Cache": "HIT" },
+        });
+      }
+
       const priced = await withProtocolFee(parsed.value);
       let result = await postAchswapQuote(priced, request.signal);
       if (priced.feeBps > 0 && isPartnerFeeRejection(result)) {
@@ -136,7 +147,7 @@ export async function POST(
       }
       return NextResponse.json(result.body, {
         status: result.status,
-        headers: { "Cache-Control": "no-store" },
+        headers: { "Cache-Control": "no-store", "X-Nexio-Quote-Cache": "MISS" },
       });
     } catch (error) {
       if (isRequestAbort(error)) return new NextResponse(null, { status: 499 });

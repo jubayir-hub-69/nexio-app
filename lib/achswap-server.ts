@@ -4,9 +4,11 @@ import { ARC_CHAIN_ID, DAILY_GM_ABI, DAILY_GM_ADDRESS, withArcRpc } from "@/lib/
 import { DEFAULT_FEE_RECIPIENT, feeBpsForStreak } from "@/lib/gm-tiers";
 
 export const ACHSWAP_UPSTREAM_TIMEOUT_MS = 8_000;
-export const STREAK_CACHE_MS = 60_000;
-export const TOKEN_TOP_CACHE_MS = 60_000;
-export const TOKEN_SEARCH_CACHE_MS = 15_000;
+export const QUOTE_CACHE_MS = 6_000;
+export const TOKEN_CACHE_TTL_MS = 60_000;
+export const TOKEN_TOP_CACHE_MS = TOKEN_CACHE_TTL_MS;
+export const TOKEN_SEARCH_CACHE_MS = TOKEN_CACHE_TTL_MS;
+export const STREAK_CACHE_MS = 120_000;
 export const RATE_LIMIT_WINDOW_MS = 60_000;
 export const RATE_LIMIT_MAX_REQUESTS = 120;
 
@@ -213,12 +215,42 @@ export async function postAchswap(
 }
 
 // ============================================================================
-// Server-Side Consecutive Streak Cache (60s TTL + stale-if-error + single-flight)
+// Persistent Global In-Memory Cache Store (Survives Next.js HMR & Warm Invocations)
+// ============================================================================
+
+type GlobalAchswapCacheStore = {
+  quoteCache: Map<string, { at: number; result: AchswapProxyResult }>;
+  quoteInflight: Map<string, Promise<AchswapProxyResult>>;
+  tokenCache: Map<string, { at: number; ttlMs: number; tokens: NormalizedAchswapToken[] }>;
+  tokenInflight: Map<string, Promise<NormalizedAchswapToken[]>>;
+  streakCache: Map<string, { streak: number; at: number }>;
+  streakInflight: Map<string, Promise<number>>;
+  ipBuckets: Map<string, number[]>;
+};
+
+const globalForAchswap = globalThis as typeof globalThis & {
+  __nexioAchswapGlobalCache?: GlobalAchswapCacheStore;
+};
+
+const globalCacheStore: GlobalAchswapCacheStore =
+  globalForAchswap.__nexioAchswapGlobalCache ??
+  (globalForAchswap.__nexioAchswapGlobalCache = {
+    quoteCache: new Map(),
+    quoteInflight: new Map(),
+    tokenCache: new Map(),
+    tokenInflight: new Map(),
+    streakCache: new Map(),
+    streakInflight: new Map(),
+    ipBuckets: new Map(),
+  });
+
+// ============================================================================
+// Server-Side Consecutive Streak Cache (120s Global TTL + stale-if-error + single-flight)
 // ============================================================================
 
 const STREAK_CACHE_MAX = 500;
-const streakCache = new Map<string, { streak: number; at: number }>();
-const streakInflight = new Map<string, Promise<number>>();
+const streakCache = globalCacheStore.streakCache;
+const streakInflight = globalCacheStore.streakInflight;
 
 export function invalidateGmStreakCache(trader?: string) {
   if (trader && ethers.isAddress(trader)) {
@@ -330,24 +362,32 @@ export async function withProtocolFee(body: QuoteFields & { sender?: string }): 
 }
 
 // ============================================================================
-// Quote Cache, Single-Flight Dedupe & Shared 429 Backoff Retry
+// Global Quote Cache (6s TTL), Single-Flight Dedupe & Shared 429 Backoff Retry
 // ============================================================================
 
-const QUOTE_CACHE_MS = 3_000;
-const QUOTE_CACHE_MAX = 200;
-const quoteCache = new Map<string, { at: number; result: AchswapProxyResult }>();
-const quoteInflight = new Map<string, Promise<AchswapProxyResult>>();
+const QUOTE_CACHE_MAX = 300;
+const quoteCache = globalCacheStore.quoteCache;
+const quoteInflight = globalCacheStore.quoteInflight;
 
-function quoteCacheKey(body: QuoteFields): string {
+export function quoteCacheKey(
+  body: Pick<QuoteFields, "tokenIn" | "tokenOut" | "amountIn">
+): string {
   return [
-    body.chainId,
-    body.tokenIn.toLowerCase(),
-    body.tokenOut.toLowerCase(),
-    body.amountIn,
-    body.feeBps,
-    (body.feeRecipient || "").toLowerCase(),
-    body.slippageBps,
+    body.tokenIn.trim().toLowerCase(),
+    body.tokenOut.trim().toLowerCase(),
+    body.amountIn.trim(),
   ].join(":");
+}
+
+export function getCachedAchswapQuote(
+  body: Pick<QuoteFields, "tokenIn" | "tokenOut" | "amountIn">
+): AchswapProxyResult | null {
+  const key = quoteCacheKey(body);
+  const cached = quoteCache.get(key);
+  if (cached && Date.now() - cached.at < QUOTE_CACHE_MS) {
+    return cached.result;
+  }
+  return null;
 }
 
 function rememberQuote(key: string, result: AchswapProxyResult) {
@@ -495,7 +535,7 @@ export function isPartnerFeeRejection(result: AchswapProxyResult): boolean {
 // Per-IP Sliding-Window Rate Limiter (120 req / 60s)
 // ============================================================================
 
-const ipBuckets = new Map<string, number[]>();
+const ipBuckets = globalCacheStore.ipBuckets;
 const MAX_TRACKED_IPS = 2_000;
 
 function extractClientIp(request: Request): string {
@@ -641,8 +681,8 @@ export function isRequestAbort(error: unknown): boolean {
 // Live Achswap Token Discovery Proxy (Top + Search + On-Chain 0x Lookup)
 // ============================================================================
 
-const tokenCache = new Map<string, { at: number; ttlMs: number; tokens: NormalizedAchswapToken[] }>();
-const tokenInflight = new Map<string, Promise<NormalizedAchswapToken[]>>();
+const tokenCache = globalCacheStore.tokenCache;
+const tokenInflight = globalCacheStore.tokenInflight;
 const TOKEN_CACHE_MAX = 120;
 
 const CANONICAL_PRIORITY: Record<string, number> = {

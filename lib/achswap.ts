@@ -744,7 +744,7 @@ function readImpact(value: unknown): number | null {
   if (value === null || value === undefined) return null;
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isFinite(parsed)) return null;
-  return parsed >= 0 ? Math.ceil(parsed) : Math.floor(parsed);
+  return parsed <= 0 ? 0 : Math.ceil(parsed);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
